@@ -52,6 +52,9 @@ RUN curl -fsSL \
         libmetis-dev \
         libomp-dev \
         libspdlog-dev \
+    && dpkg-query -W libiridescence-dev \
+    && find /usr -type f -iname 'iridescence-config.cmake' -print -quit | grep -q . \
+    && test -f /usr/include/iridescence/glk/io/ply_io.hpp \
     && rm -f /tmp/koide3-ppa.gpg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -185,9 +188,9 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
     && test -x /opt/surf/lib/caltech_bonxai_builder/pcd_to_ros_occupancy.py \
     && rm -rf build log
 
-COPY deploy/jetson/ros_entrypoint.sh /ros_entrypoint.sh
-COPY deploy/jetson/render_mid360_config.py /usr/local/bin/render_mid360_config.py
-COPY deploy/jetson/root.bashrc /root/.bashrc
+COPY surf_ws/src/distributed_mapping_surf/deploy/jetson/ros_entrypoint.sh /ros_entrypoint.sh
+COPY surf_ws/src/distributed_mapping_surf/deploy/jetson/render_mid360_config.py /usr/local/bin/render_mid360_config.py
+COPY surf_ws/src/distributed_mapping_surf/deploy/jetson/root.bashrc /root/.bashrc
 RUN chmod 0755 /ros_entrypoint.sh /usr/local/bin/render_mid360_config.py \
     && mkdir -p /data/telemetry /data/ros-logs /opt/surf_ws/maps
 
