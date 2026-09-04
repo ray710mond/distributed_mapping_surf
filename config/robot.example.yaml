@@ -1,0 +1,72 @@
+# Launch-level integration contract. Replace every CHANGE_ME value.
+integration:
+  robot_namespace: CHANGE_ME_ROBOT_NAMESPACE
+  pointcloud_topic: CHANGE_ME_POINTCLOUD_TOPIC
+  odometry_topic: CHANGE_ME_ODOMETRY_TOPIC
+  pose_source: odometry          # odometry or tf
+  map_frame: map
+  odometry_frame: CHANGE_ME_ODOMETRY_FRAME
+  body_frame: CHANGE_ME_BODY_FRAME
+  transport_config: CHANGE_ME_ABSOLUTE_TRANSPORT_YAML
+  map_path: CHANGE_ME_ABSOLUTE_MAP_PATH
+  telemetry_directory: CHANGE_ME_ABSOLUTE_TELEMETRY_DIRECTORY
+
+# Parameters passed to the unchanged sender. Topic and frame values above
+# override the corresponding defaults at launch time.
+/**/drone_scan_sender:
+  ros__parameters:
+    use_sim_time: false
+    robot_name: drone
+    resolution: 0.05
+    filters:
+      min_range: 0.75
+      max_range: 50.0
+      min_z: 0.25
+      max_z: 20.0
+      self_radius: 0.70
+      humanoid_mask:
+        enabled: true
+    adaptive:
+      enabled: true
+      manual_mode: -1
+
+/**/drone_data_receiver:
+  ros__parameters:
+    use_sim_time: false
+    robot_name: humanoid
+    maximum_uncompressed_bytes: 67108864
+
+/**/bonxai_server_node:
+  ros__parameters:
+    use_sim_time: false
+    occupancy:
+      static_resolution: 0.05
+      dynamic_resolution: 0.05
+      occupancy_min_z: 0.25
+      occupancy_max_z: 20.0
+      occupancy_threshold: 0.50
+    fusion:
+      conflict_tolerance_sec: 5.0
+      require_both_localized: true
+    sensor_model:
+      max_range: 100.0
+      hit: 0.70
+      miss: 0.10
+      min: 0.08
+      max: 0.85
+    map_storage:
+      load_on_startup: true
+      save_on_shutdown: true
+    dynamic_obstacles:
+      enabled: true
+
+/**/data_tracker:
+  ros__parameters:
+    use_sim_time: false
+    run_id: ""
+    experiment_name: ""
+    notes: ""
+    record_raw_events: false
+    network_stats_enabled: true
+    # Replace these with real interfaces or use an empty list.
+    network_interfaces: []

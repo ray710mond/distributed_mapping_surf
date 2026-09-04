@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+config=/etc/surf/halow-telemetry.env
+if [[ ! -r "$config" ]]; then
+    echo "Missing $config" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$config"
+: "${SURF_TELEMETRY_USER:?SURF_TELEMETRY_USER is required}"
+: "${SURF_HALOW_INTERFACE:?SURF_HALOW_INTERFACE is required}"
+: "${SURF_HALOW_SAMPLE_INTERVAL_SECONDS:=1}"
+
+telemetry_group=$(id -gn "$SURF_TELEMETRY_USER")
+export_root=/run/surf-halow-telemetry
+output_dir="$export_root/$SURF_HALOW_INTERFACE"
+install -d -o root -g "$telemetry_group" -m 0750 "$export_root" "$output_dir"
+
+publish_file() {
+    local source=$1
+    local name=$2
+    local temporary
+    temporary=$(mktemp "$output_dir/.${name}.XXXXXX")
+    if cp -- "$source" "$temporary"; then
+        chown "$SURF_TELEMETRY_USER:$telemetry_group" "$temporary"
+        chmod 0440 "$temporary"
+        mv -f -- "$temporary" "$output_dir/$name"
+    else
+        rm -f -- "$temporary"
+        return 1
+    fi
+}
+
+while true; do
+    phy_link="/sys/class/net/$SURF_HALOW_INTERFACE/phy80211"
+    if [[ -e "$phy_link" ]]; then
+        phy=$(basename "$(readlink -f "$phy_link")")
+        source_root="/sys/kernel/debug/ieee80211/$phy/morse"
+        if [[ -r "$source_root/mmrc_table_csv" && -r "$source_root/page_stats" ]]; then
+            publish_file "$source_root/mmrc_table_csv" mmrc_table_csv || true
+            publish_file "$source_root/page_stats" page_stats || true
+        fi
+    fi
+    sleep "$SURF_HALOW_SAMPLE_INTERVAL_SECONDS"
+done

@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    common:
+      # Topics and frames are supplied by hardware.launch.py from the robot
+      # namespace so this sensor configuration contains no robot prefix.
+      time_sync_en: false
+      time_offset_lidar_to_imu: 0.0

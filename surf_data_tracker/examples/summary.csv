@@ -1,0 +1,4 @@
+category,pipeline,stage,metric,unit,measurement,sample_count,mean,median,min,max,stddev,p5,p50,p95,p99,total,note
+pipeline,pointcloud_communication,realtime:compression,cumulative_saved_pct,pct,calculated,1200,91.8,92.0,88.1,94.2,1.1,89.7,92.0,93.5,94.0,110160,relative to raw ROS serialization
+compute,pointcloud_communication,realtime:compression,compute_ms,ms,measured,1200,1.84,1.77,1.10,4.90,0.42,1.24,1.77,2.62,3.40,2208,same-host monotonic duration
+network,wireless,halow_realtime,tx_interface_mbps,Mbps,measured,240,2.31,2.25,0.02,4.82,0.70,1.20,2.25,3.61,4.10,554.4,

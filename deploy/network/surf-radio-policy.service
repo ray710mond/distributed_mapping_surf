@@ -1,0 +1,11 @@
+[Unit]
+Description=Apply persistent SURF wireless power policy
+After=NetworkManager.service network-pre.target
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/surf-radio-policy
+
+[Install]
+WantedBy=multi-user.target

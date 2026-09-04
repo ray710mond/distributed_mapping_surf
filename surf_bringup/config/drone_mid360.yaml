@@ -1,0 +1,13 @@
+/**:
+  ros__parameters:
+    common:
+      # Topics and frames are supplied by hardware.launch.py from the robot
+      # namespace so this sensor configuration is reusable by either robot.
+      time_sync_en: false
+      time_offset_lidar_to_imu: 0.0
+    mapping:
+      # The MID360 publishes lidar and IMU measurements from one rigid sensor.
+      # Keep the calibrated transform from mid360_lio.yaml fixed. Estimating it
+      # online makes attitude and translation observable only through vehicle
+      # motion and can let the filter run away when scan matching degenerates.
+      extrinsic_est_en: false

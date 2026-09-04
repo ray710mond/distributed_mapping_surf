@@ -1,0 +1,56 @@
+/**/bonxai_server_node:
+  ros__parameters:
+    use_sim_time: false
+    frame_id: map
+    topic_in: /points
+    delta_topic_in: ""
+    occupancy:
+      static_resolution: 0.05
+      dynamic_resolution: 0.05
+      occupancy_min_z: 0.25
+      occupancy_max_z: 20.0
+      occupancy_threshold: 0.50
+
+    fusion:
+      # Conflicting observations this close in scan time resolve as occupied.
+      # Outside this window, the more recent observation wins.
+      conflict_tolerance_sec: 5.0
+      # A drone delta proves the drone has a global map transform because its
+      # sender cannot create deltas without one. Also require this server's
+      # robot to have map -> base before accepting or persisting remote cells.
+      require_both_localized: true
+
+    sensor_model:
+      max_range: 100.0
+      hit: 0.70
+      miss: 0.10
+      min: 0.08
+      max: 0.85
+    server:
+      cleanup_interval_sec: 300.0
+    map_storage:
+      path: ""
+      # Empty derives a sibling .pcd path from map_storage.path.
+      pcd_path: ""
+      # Preserve the static occupancy map across graceful restarts. Bringup
+      # supplies a role-specific path and can still disable this explicitly.
+      load_on_startup: true
+      save_on_shutdown: true
+    stats:
+      enable_stats: true
+      quick_stats: true
+      publish_occupied_voxels: true
+      publish_rate: 10.0
+      static_publish_rate: 0.5
+      dynamic_publish_rate: 10.0
+    dynamic_obstacles:
+      enabled: true
+      static_stability_hits: 30
+      static_stability_time_sec: 1.0
+      min_probability: 0.05
+      # Associate adjacent returns as one obstacle and tolerate one-voxel
+      # boundary jitter while accumulating static confidence.
+      cluster_connectivity_voxels: 1
+      spatial_tolerance_voxels: 1
+      sensor_noise_m: 0.075
+      static_confidence_threshold: 0.7

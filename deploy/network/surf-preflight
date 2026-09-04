@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -u
+status=0
+pass() { echo "PASS  $*"; }
+fail() { echo "FAIL  $*" >&2; status=1; }
+
+if [[ -r /etc/surf/jetson-network.env ]]; then
+    source /etc/surf/jetson-network.env
+    route=$(ip route get "$SURF_JETSON_HALOW_PEER" 2>/dev/null || true)
+    [[ $route == *" dev $SURF_JETSON_HALOW_IF "* ]] && \
+        pass "$SURF_JETSON_HALOW_PEER routes over $SURF_JETSON_HALOW_IF" || \
+        fail "$SURF_JETSON_HALOW_PEER is not routed over $SURF_JETSON_HALOW_IF"
+fi
+
+[[ -r /etc/surf/radio-policy.env ]] && source /etc/surf/radio-policy.env
+for interface in ${SURF_RADIO_INTERFACES:-}; do
+    if [[ ! -e /sys/class/net/$interface ]]; then
+        fail "$interface is absent"
+        continue
+    fi
+    interface_type=$(iw dev "$interface" info 2>/dev/null | awk '$1 == "type" {print $2; exit}')
+    if [[ $interface_type == AP ]]; then
+        pass "$interface is an AP; station power-save setting is not applicable"
+        continue
+    fi
+    state=$(iw dev "$interface" get power_save 2>/dev/null || true)
+    [[ $state == *"Power save: off"* ]] && pass "$interface power saving is off" || fail "$interface power saving is not confirmed off ($state)"
+done
+
+if [[ -r /etc/surf/halow-telemetry.env ]]; then
+    source /etc/surf/halow-telemetry.env
+    root="/run/surf-halow-telemetry/$SURF_HALOW_INTERFACE"
+    [[ -s "$root/mmrc_table_csv" && -s "$root/page_stats" ]] && \
+        pass "HaLow physical telemetry is available" || fail "HaLow physical telemetry is unavailable"
+fi
+systemctl is-active --quiet surf-halow-telemetry-exporter.service && \
+    pass "HaLow telemetry exporter is active" || fail "HaLow telemetry exporter is inactive"
+
+if command -v clock-sync-status >/dev/null 2>&1; then
+    clock-sync-status && pass "clock verification is current" || fail "clock verification is unavailable"
+fi
+exit "$status"

@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""Validate the non-ROS portion of a portable SURF robot configuration."""
+
+import argparse
+import ipaddress
+from pathlib import Path
+import sys
+
+import yaml
+
+
+REQUIRED = (
+    'robot_namespace', 'pointcloud_topic', 'odometry_topic', 'pose_source',
+    'map_frame', 'odometry_frame', 'body_frame', 'transport_config', 'map_path',
+    'telemetry_directory',
+)
+
+
+def walk(value, path='transport'):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from walk(child, f'{path}.{key}')
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from walk(child, f'{path}[{index}]')
+    else:
+        yield path, value
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('config', type=Path)
+    args = parser.parse_args()
+    errors = []
+    try:
+        document = yaml.safe_load(args.config.read_text(encoding='utf-8')) or {}
+    except (OSError, yaml.YAMLError) as error:
+        print(f'FAIL: {error}', file=sys.stderr)
+        return 2
+    integration = document.get('integration', {})
+    if not isinstance(integration, dict):
+        errors.append('integration must be a mapping')
+        integration = {}
+    for key in REQUIRED:
+        value = integration.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f'integration.{key} is required')
+        elif 'CHANGE_ME' in value:
+            errors.append(f'integration.{key} still contains a placeholder')
+    if integration.get('pose_source') not in ('odometry', 'tf'):
+        errors.append('integration.pose_source must be odometry or tf')
+    namespace = integration.get('robot_namespace', '')
+    if isinstance(namespace, str) and namespace.strip('/') and '/' in namespace.strip('/'):
+        errors.append('integration.robot_namespace must be one namespace token')
+    for key in ('pointcloud_topic', 'odometry_topic'):
+        value = integration.get(key, '')
+        if isinstance(value, str) and value and not value.startswith('/'):
+            errors.append(f'integration.{key} must be an absolute ROS topic')
+    # Validate literal IP values found in transport configuration when present.
+    transport = Path(str(integration.get('transport_config', ''))).expanduser()
+    if transport.is_file():
+        try:
+            transport_doc = yaml.safe_load(transport.read_text(encoding='utf-8')) or {}
+            for path, value in walk(transport_doc):
+                if isinstance(value, str) and 'CHANGE_ME' in value:
+                    errors.append(f'{path} still contains a placeholder')
+                if path.endswith(('.local_address', '.remote_address')) and value:
+                    if 'CHANGE_ME' not in str(value):
+                        ipaddress.ip_address(value)
+        except (OSError, yaml.YAMLError, ValueError) as error:
+            errors.append(f'transport config is invalid: {error}')
+    if errors:
+        for error in errors:
+            print(f'FAIL: {error}', file=sys.stderr)
+        return 1
+    print(f'PASS: {args.config}')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

@@ -1,0 +1,50 @@
+# This preserves the current development distribution. Create a separate
+# Humble branch before changing ROS source or this base image for deployment.
+FROM ros:jazzy-ros-base-noble
+
+ARG DEBIAN_FRONTEND=noninteractive
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3-colcon-common-extensions \
+        python3-rosdep \
+        ros-jazzy-network-bridge \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/surf
+COPY dependencies/rolling_bonxai \
+    src/distributed_mapping_surf/dependencies/rolling_bonxai
+COPY surf_multirobot_msgs src/distributed_mapping_surf/surf_multirobot_msgs
+COPY surf_multirobot_comms src/distributed_mapping_surf/surf_multirobot_comms
+COPY surf_drone src/distributed_mapping_surf/surf_drone
+COPY surf_humanoid src/distributed_mapping_surf/surf_humanoid
+COPY surf_data_tracker src/distributed_mapping_surf/surf_data_tracker
+COPY surf_portable_bringup src/distributed_mapping_surf/surf_portable_bringup
+RUN (rosdep init 2>/dev/null || true) \
+    && rosdep update --rosdistro jazzy \
+    && apt-get update \
+    && rosdep install --from-paths \
+        src/distributed_mapping_surf/surf_multirobot_msgs \
+        src/distributed_mapping_surf/surf_multirobot_comms \
+        src/distributed_mapping_surf/surf_drone \
+        src/distributed_mapping_surf/surf_humanoid \
+        src/distributed_mapping_surf/surf_data_tracker \
+        src/distributed_mapping_surf/surf_portable_bringup \
+        src/distributed_mapping_surf/dependencies/rolling_bonxai/bonxai_core \
+        src/distributed_mapping_surf/dependencies/rolling_bonxai/bonxai_map \
+        src/distributed_mapping_surf/dependencies/rolling_bonxai/bonxai_msgs \
+        src/distributed_mapping_surf/dependencies/rolling_bonxai/bonxai_ros \
+        --ignore-src \
+        --rosdistro jazzy -r -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && source /opt/ros/jazzy/setup.bash \
+    && colcon build --merge-install --install-base /opt/surf/install \
+        --packages-up-to surf_portable_bringup \
+        --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    && rm -rf build log
+
+COPY deploy/docker/entrypoint.sh /entrypoint.sh
+RUN chmod 0755 /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]

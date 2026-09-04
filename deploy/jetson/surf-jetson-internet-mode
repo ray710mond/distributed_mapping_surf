@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE=${SURF_JETSON_NETWORK_CONFIG:-/etc/surf/jetson-network.env}
+
+if [[ ${EUID} -ne 0 ]]; then
+    echo "Run with sudo: sudo surf-jetson-internet-mode" >&2
+    exit 1
+fi
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    echo "Jetson network configuration is not readable: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+WIFI_IF=${SURF_JETSON_WIFI_IF:?SURF_JETSON_WIFI_IF is required}
+PROFILE=${SURF_JETSON_INTERNET_PROFILE:?SURF_JETSON_INTERNET_PROFILE is required}
+HALOW_IF=${SURF_JETSON_HALOW_IF:?SURF_JETSON_HALOW_IF is required}
+HALOW_PEER=${SURF_JETSON_HALOW_PEER:?SURF_JETSON_HALOW_PEER is required}
+
+halow_route=$(ip route get "$HALOW_PEER")
+if [[ $halow_route != *" dev $HALOW_IF "* ]]; then
+    echo "Refusing to switch: $HALOW_PEER is not routed through $HALOW_IF." >&2
+    exit 1
+fi
+
+nmcli connection show "$PROFILE" >/dev/null
+nmcli connection up "$PROFILE" ifname "$WIFI_IF"
+
+internet_route=$(ip route get 1.1.1.1)
+if [[ $internet_route != *" dev $WIFI_IF "* ]]; then
+    echo "$PROFILE connected, but the Internet route does not use $WIFI_IF." >&2
+    exit 1
+fi
+
+echo
+echo "Jetson Internet mode active."
+echo "Internet profile: $PROFILE"
+echo "Internet route:   $internet_route"
+echo "HaLow SSH peer:   $HALOW_PEER via $HALOW_IF"
+echo "The 5 GHz ROS link is paused until surf-jetson-test-mode is run."

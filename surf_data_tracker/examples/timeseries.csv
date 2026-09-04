@@ -1,0 +1,4 @@
+window_start_s,window_end_s,host,category,pipeline,stage,metric,unit,measurement,sample_count,mean,min,max,total,distance_m,distance_xy_m,separation_direction
+0,1,drone-jetson,pipeline,pointcloud_communication,realtime:raw_ros_message,output_rate_mbps,Mbps,calculated,10,30.0,,,30.0,,,
+0,1,drone-jetson,pipeline,pointcloud_communication,realtime:ros_transport_message,output_rate_mbps,Mbps,calculated,10,2.0,,,2.0,,,
+0,1,drone-jetson,network,wireless,halow_realtime,tx_interface_mbps,Mbps,measured,2,2.31,2.20,2.42,4.62,6.4,6.3,increasing

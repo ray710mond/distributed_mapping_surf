@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+trap 'status=$?; if (( BASH_SUBSHELL == 0 )); then echo "surf-jetson-test-mode failed at line $LINENO (exit $status)." >&2; fi' ERR
+
+CONFIG_FILE=${SURF_JETSON_NETWORK_CONFIG:-/etc/surf/jetson-network.env}
+
+if [[ ${EUID} -ne 0 ]]; then
+    echo "Run with sudo: sudo surf-jetson-test-mode" >&2
+    exit 1
+fi
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    echo "Jetson network configuration is not readable: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+WIFI_IF=${SURF_JETSON_WIFI_IF:?SURF_JETSON_WIFI_IF is required}
+PROFILE=${SURF_JETSON_TEST_PROFILE:?SURF_JETSON_TEST_PROFILE is required}
+HALOW_IF=${SURF_JETSON_HALOW_IF:?SURF_JETSON_HALOW_IF is required}
+HALOW_PEER=${SURF_JETSON_HALOW_PEER:?SURF_JETSON_HALOW_PEER is required}
+TEST_ADDR=${SURF_JETSON_TEST_ADDR:?SURF_JETSON_TEST_ADDR is required}
+
+halow_route=$(ip route get "$HALOW_PEER")
+if [[ $halow_route != *" dev $HALOW_IF "* ]]; then
+    echo "Refusing to switch: $HALOW_PEER is not routed through $HALOW_IF." >&2
+    exit 1
+fi
+
+nmcli connection show "$PROFILE" >/dev/null
+nmcli connection up "$PROFILE" ifname "$WIFI_IF"
+
+if ! ip -4 address show dev "$WIFI_IF" | grep -Fq "inet $TEST_ADDR"; then
+    echo "$WIFI_IF does not have the expected test address $TEST_ADDR." >&2
+    exit 1
+fi
+
+# Field-test mode has no Internet access. Temporarily use the laptop on the
+# independent HaLow management link as the time source so ROS timestamps are
+# comparable across both hosts. This source is runtime-only: it is not written
+# to chrony.conf and disappears when chronyd or the Jetson restarts.
+if ! command -v chronyc >/dev/null 2>&1; then
+    echo "chronyc is required for test-time clock synchronization." >&2
+    echo "Install it with: sudo apt install chrony" >&2
+    exit 1
+fi
+
+# Keep an existing runtime source so repeated invocations preserve the samples
+# Chrony needs to select it. Chrony can display a reverse-resolved hostname even
+# with -n, so a duplicate-source response is the reliable idempotent result.
+add_result=$(chronyc add server "$HALOW_PEER" iburst prefer 2>&1) || true
+if [[ $add_result != *"200 OK"* && $add_result != *"511 Source already present"* ]]; then
+    echo "Chrony rejected laptop source $HALOW_PEER: $add_result" >&2
+    exit 1
+fi
+if ! chronyc burst 4/4 "$HALOW_PEER" >/dev/null 2>&1; then
+    echo "Chrony burst request for $HALOW_PEER was not accepted; waiting for normal polling." >&2
+fi
+
+# Permit an immediate correction after measurements arrive, including recovery
+# from a clock that is hours wrong, then require <=10 ms remaining correction.
+synced=false
+sync_deadline=$((SECONDS + 30))
+IFS=. read -r peer_octet_1 peer_octet_2 peer_octet_3 peer_octet_4 <<< "$HALOW_PEER"
+printf -v peer_reference_id '%02X%02X%02X%02X' \
+    "$peer_octet_1" "$peer_octet_2" "$peer_octet_3" "$peer_octet_4"
+while (( SECONDS < sync_deadline )); do
+    chronyc makestep >/dev/null 2>&1 || true
+    selected_reference_id=$(chronyc -c tracking 2>/dev/null | \
+      awk -F, 'NR == 1 { print toupper($1) }')
+    if [[ $selected_reference_id == "$peer_reference_id" ]] && \
+      chronyc waitsync 1 0.01 >/dev/null 2>&1
+    then
+        synced=true
+        break
+    fi
+    sleep 1
+done
+if [[ $synced != true ]]; then
+    echo "Jetson clock did not synchronize to laptop $HALOW_PEER within 30 seconds." >&2
+    chronyc sources -v >&2 || true
+    exit 1
+fi
+
+# Export a short-lived verification record for the containerized tracker. The
+# tracker accepts it for five minutes, so a stale file cannot silently validate
+# clocks after Chrony or the network configuration changes.
+tracking=$(chronyc -c tracking)
+IFS=, read -r -a tracking_fields <<< "$tracking"
+tracking_count=${#tracking_fields[@]}
+if (( tracking_count < 13 )); then
+    echo "Chrony returned an incomplete tracking record: $tracking" >&2
+    exit 1
+fi
+# Some Chrony builds add the reference hostname after the reference ID. Fields
+# at the end of the CSV are stable across both 13- and 14-column variants.
+system_time=${tracking_fields[tracking_count-10]}
+rms_offset=${tracking_fields[tracking_count-8]}
+root_delay=${tracking_fields[tracking_count-4]}
+root_dispersion=${tracking_fields[tracking_count-3]}
+leap_status=${tracking_fields[tracking_count-1]}
+if [[ ${leap_status,,} != normal ]]; then
+    echo "Chrony reports a non-normal leap status: $leap_status" >&2
+    exit 1
+fi
+offset_ms=$(awk -v value="$system_time" 'BEGIN { printf "%.9f", value * 1000.0 }')
+uncertainty_ms=$(awk -v system_value="$system_time" -v rms="$rms_offset" \
+    -v delay="$root_delay" -v dispersion="$root_dispersion" '
+    function abs(value) { return value < 0 ? -value : value }
+    BEGIN { printf "%.9f", (abs(system_value) + abs(rms) + 0.5 * abs(delay) + abs(dispersion)) * 1000.0 }')
+status_dir=/run/surf-clock-sync
+status_tmp="$status_dir/status.json.tmp"
+install -d -m 0755 "$status_dir"
+printf '{\n  "verified": true,\n  "method": "chrony-halow-client",\n  "source": "%s",\n  "offset_ms": %s,\n  "uncertainty_ms": %s,\n  "measured_at_unix_ns": %s,\n  "measured_at_utc": "%s"\n}\n' \
+    "$HALOW_PEER" "$offset_ms" "$uncertainty_ms" "$(date +%s%N)" \
+    "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" > "$status_tmp"
+chmod 0644 "$status_tmp"
+mv -f "$status_tmp" "$status_dir/status.json"
+
+echo
+echo "Jetson test mode active."
+echo "5 GHz profile:  $PROFILE"
+echo "Jetson address: $TEST_ADDR"
+echo "HaLow SSH peer: $HALOW_PEER via $HALOW_IF"
+echo "Clock source:   laptop $HALOW_PEER (temporary, <=10 ms correction)"
+echo "Clock proof:    $status_dir/status.json (valid for tracker startup for 5 minutes)"
+echo "Internet is intentionally unavailable through the 5 GHz robot link."

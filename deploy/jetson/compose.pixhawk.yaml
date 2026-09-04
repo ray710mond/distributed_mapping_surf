@@ -1,0 +1,6 @@
+services:
+  surf:
+    devices:
+      # Apply this override only on a machine with a Pixhawk attached. The
+      # stable host path can be set in the per-robot env file.
+      - ${PIXHAWK_DEVICE:-/dev/ttyACM0}:/dev/pixhawk

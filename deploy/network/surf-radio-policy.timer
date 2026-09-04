@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically maintain SURF wireless power policy
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=30s
+Unit=surf-radio-policy.service
+
+[Install]
+WantedBy=timers.target

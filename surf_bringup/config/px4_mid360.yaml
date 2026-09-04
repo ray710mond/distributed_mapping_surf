@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    mapping:
+      # Initial LiDAR pose in the PX4 IMU's ROS FLU body frame. Online
+      # estimation is enabled by mid360_lio.yaml, but these values still need
+      # to be replaced by the measured/calibrated FCU-to-MID360 transform for
+      # flight-quality motion compensation.
+      extrinsic_T: [0.0, 0.0, 0.0]
+      extrinsic_R: [1.0, 0.0, 0.0,
+                    0.0, 1.0, 0.0,
+                    0.0, 0.0, 1.0]

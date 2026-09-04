@@ -1,0 +1,3 @@
+# Runtime-generated Bonxai maps and their metadata.
+*.bonxai
+*.bonxai.yaml

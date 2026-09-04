@@ -1,0 +1,98 @@
+/**/drone_scan_sender:
+  ros__parameters:
+    use_sim_time: false
+    robot_name: drone
+    map_frame: map
+    input_topic: /drone/points
+    realtime_topic: /drone/transport/realtime_tx
+    realtime_ack_topic: /drone/transport/realtime_ack
+    realtime_ack_metrics_topic: /drone/comm/realtime_ack_metrics
+    sync_topic: /drone/transport/sync_tx
+    sync_ack_topic: /drone/transport/sync_ack
+    sync_request_topic: /drone/transport/sync_request
+    sync_status_topic: /drone/comm/sync_status
+    link_metrics_topic: /surf/comm/link_metrics
+    metrics_topic: /drone/comm/pipeline_metrics
+    pose_source:
+      # Resolve map -> drone/map through TF so the surveyed initial alignment
+      # is applied before voxel coordinates are transmitted for fusion.
+      type: tf
+      odometry_topic: /drone/odom
+      odometry_parent_frame: map
+      base_frame: drone/body
+      max_age_ms: 50.0
+      tf_timeout_ms: 500.0
+    # Match the Bonxai map resolution so transmitted occupancy retains 5 cm
+    # detail throughout the mapping and fusion pipeline.
+    resolution: 0.05
+    compression_level: 1
+    transport:
+      # CDR-serialized ROS message ceiling. Leaves room below a 1500-byte MTU
+      # for RTPS, UDP, IP, and link-layer headers.
+      maximum_packet_bytes: 1200
+      # Priority selection (delete, dynamic/free, then near-to-far static)
+      # stops after compression/CDR serialization reaches this cap.
+      maximum_update_bytes: 7200
+      # ACKs are observational only: they never block or retry a real-time update.
+      realtime_ack_timeout_seconds: 2.0
+      # TCP performs its own segmentation, so refresh chunks can be much
+      # larger than the MTU-oriented HaLow datagrams.
+      maximum_sync_packet_bytes: 65536
+      # Safety ceiling for large outdoor full-map refreshes.
+      maximum_sync_update_bytes: 16777216
+      # network_bridge retains one latest sample per topic. Pace chunks beyond
+      # its 10 ms sampling period so burst publications are not overwritten.
+      chunk_publish_interval_ms: 15
+      # Retry the retained refresh until the humanoid confirms reconstruction.
+      sync_ack_timeout_seconds: 2.0
+      sync_ack_margin_seconds: 2.0
+      sync_max_interval_seconds: 60.0
+      sync_target_duty_cycle: 0.10
+    # Static coordinates are phase-distributed across this cycle rather than
+    # all becoming due on the same scan.
+    delta_refresh_scans: 50
+    tombstone_retention_scans: 500
+    dynamic_retention_scans: 20
+    sync_interval_seconds: 10.0
+    # Preserve the previous 60 m traversal allowance at 5 cm per voxel.
+    maximum_ray_voxels: 1200
+    # Trace every valid endpoint in the normal simulation scan (~3,500 unique
+    # voxels). Limiting this to 256 allowed stale communication-cache
+    # occupancies to survive even when later scans directly observed free space.
+    # This affects only transmitted fusion evidence; the drone's local Bonxai
+    # mapping pipeline remains untouched.
+    maximum_clear_rays: 4096
+    filters:
+      min_range: 0.75
+      max_range: 50.0
+      min_z: 0.25
+      max_z: 20.0
+      self_radius: 0.70
+      humanoid_mask:
+        # The HaLow bridge publishes the peer's original timestamped odometry
+        # below the local transport namespace. Both poses must use the common
+        # map frame for this oriented bounding-box mask to be valid.
+        enabled: true
+        odometry_topic: /drone/transport/humanoid_odometry
+        # Physical humanoid bounding box. Padding is added independently to
+        # every face to cover localization error and motion between samples.
+        model_size_x: 0.60
+        model_size_y: 0.70
+        model_size_z: 1.40
+        model_center_z: 0.70
+        padding: 0.20
+        max_age_ms: 150.0
+      static_min_hits: 20
+      clear_min_misses: 3
+    adaptive:
+      enabled: false
+      manual_mode: 1
+      full_min_mbps: 12.0
+      delta_min_mbps: 3.0
+      dynamic_min_mbps: 0.75
+      up_hysteresis_mbps: 1.0
+      down_hold_seconds: 2.0
+      up_hold_seconds: 5.0
+      minimum_dwell_seconds: 5.0
+      ewma_alpha: 0.20
+      congested_queue_depth: 2

@@ -1,0 +1,23 @@
+/**/scan_lock:
+  ros__parameters:
+    scan_lock:
+      pcd_file_name: ""
+      register_period_s: 5.0
+      scan_max_range: 6.0
+      local_map_radius: 5.0
+      submap_half_extent: 8.0
+      submap_rebuild_threshold: 2.0
+      correct_roll_pitch: true
+      registration_timing: false
+
+    initial_guess:
+      use_default: false
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      roll: 0.0
+      pitch: 0.0
+      yaw: 0.0
+      ground_search_radius_x: 5.0
+      ground_search_radius_y: 5.0
+      ground_percentile: 0.05

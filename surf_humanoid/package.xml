@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>surf_humanoid</name>
+  <version>0.1.0</version>
+  <description>Humanoid-side decompression and remote voxel ingestion for SURF.</description>
+  <maintainer email="raymond@todo.invalid">Raymond</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>surf_multirobot_comms</depend>
+  <depend>surf_multirobot_msgs</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

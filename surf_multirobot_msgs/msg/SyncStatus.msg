@@ -1,0 +1,21 @@
+uint8 STATE_QUEUED=0
+uint8 STATE_RETRY=1
+uint8 STATE_ACKNOWLEDGED=2
+uint8 STATE_REQUESTED=3
+uint8 STATE_TRANSMITTED=4
+
+std_msgs/Header header
+string source_id
+uint64 map_epoch
+uint64 version
+uint8 state
+uint32 wire_bytes
+uint32 packet_count
+uint32 retry_count
+float32 encoding_ms
+float32 estimated_transfer_ms
+float32 transfer_ms
+float32 acknowledgment_ms
+float32 acknowledgment_timeout_ms
+float32 next_refresh_interval_s
+string reason

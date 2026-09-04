@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+CONFIG_FILE=${SURF_LOCAL_CONFIG:-/etc/surf/local.env}
+
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    echo "Local deployment configuration is not readable: $CONFIG_FILE" >&2
+    exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+RADIO_IF=${SURF_UPLINK_IF:?SURF_UPLINK_IF is required}
+PROFILE=${SURF_NORMAL_WIFI_PROFILE:?SURF_NORMAL_WIFI_PROFILE is required}
+
+if [[ ${EUID} -ne 0 ]]; then
+    echo "Run with sudo: sudo surf-normal-mode" >&2
+    exit 1
+fi
+
+echo "Switching to normal Wi-Fi mode..."
+
+systemctl stop surf-robot-hotspot.service 2>/dev/null || true
+
+# systemd does not run ExecStop for an already-inactive unit. Invoke the same
+# helper once more so remnants from an interrupted or older run are removed.
+/usr/local/sbin/stop-surf-hotspot >/dev/null
+
+# Defensive recovery in case an earlier version of the scripts marked
+# the physical Wi-Fi interface unmanaged.
+nmcli device set "$RADIO_IF" managed yes
+
+sleep 1
+
+if ! nmcli connection up "$PROFILE" ifname "$RADIO_IF"; then
+    echo
+    echo "Could not activate NetworkManager profile: $PROFILE" >&2
+    echo "Available Wi-Fi profiles:" >&2
+    nmcli -f NAME,TYPE connection show | awk '$2 == "wifi" {print "  " $1}' >&2
+    exit 1
+fi
+
+echo
+echo "Normal Wi-Fi mode active."
+nmcli -f GENERAL.DEVICE,GENERAL.STATE,GENERAL.CONNECTION device show "$RADIO_IF"
+iw dev "$RADIO_IF" link

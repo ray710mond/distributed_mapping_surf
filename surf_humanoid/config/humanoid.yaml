@@ -1,0 +1,22 @@
+/**/drone_data_receiver:
+  ros__parameters:
+    use_sim_time: false
+    robot_name: humanoid
+    realtime_topic: /humanoid/transport/realtime_tx
+    realtime_ack_topic: /humanoid/transport/realtime_ack
+    sync_topic: /humanoid/transport/sync_tx
+    sync_ack_topic: /humanoid/transport/sync_ack
+    sync_request_topic: /humanoid/transport/sync_request
+    output_topic: /humanoid/comm/drone_voxel_delta
+    maximum_uncompressed_bytes: 67108864
+    # Peer state delivered by the HaLow bridge for task coordination. The
+    # receiver does not mask the humanoid's local sensor today; these bounding
+    # box values define the drone model for a future reciprocal scan filter.
+    peer_odometry_topic: /humanoid/transport/drone_odometry
+    peer_bounding_box:
+      model_size_x: 0.70
+      model_size_y: 0.70
+      model_size_z: 0.40
+      model_center_z: 0.0
+      padding: 0.20
+      max_age_ms: 150.0

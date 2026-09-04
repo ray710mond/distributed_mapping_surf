@@ -1,0 +1,25 @@
+services:
+  surf:
+    image: surf-portable-jazzy:${SURF_IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.jazzy
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
+    volumes:
+      - ${SURF_ROBOT_CONFIG:?Set SURF_ROBOT_CONFIG}:/config/robot.yaml:ro
+      - ${SURF_TRANSPORT_CONFIG:?Set SURF_TRANSPORT_CONFIG}:/config/transport.yaml:ro
+      - ${SURF_MAP_DIRECTORY:?Set SURF_MAP_DIRECTORY}:/data/maps
+      - ${SURF_TELEMETRY_DIRECTORY:?Set SURF_TELEMETRY_DIRECTORY}:/data/telemetry
+    command:
+      - ros2
+      - launch
+      - surf_portable_bringup
+      - portable.launch.py
+      - role:=${SURF_ROLE:?Set SURF_ROLE to drone or humanoid}
+      - config:=/config/robot.yaml

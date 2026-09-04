@@ -1,0 +1,32 @@
+/**/halow_bridge:
+  ros__parameters:
+    network_interface: network_bridge::UdpInterface
+    UdpInterface:
+      local_address: CHANGE_ME_HUMANOID_HALOW_ADDRESS
+      receive_port: 46000
+      remote_address: CHANGE_ME_DRONE_HALOW_ADDRESS
+      send_port: 46000
+    default_rate: 100.0
+    default_zstd_level: 1
+    publish_stale_data: false
+    topics:
+      - /humanoid_odometry
+      - /realtime_ack
+    subscribe_namespace: /humanoid/transport
+    publish_namespace: /humanoid/transport
+
+/**/wifi_bridge:
+  ros__parameters:
+    network_interface: network_bridge::TcpInterface
+    TcpInterface:
+      role: server
+      port: 46001
+    default_rate: 100.0
+    default_zstd_level: 1
+    publish_stale_data: false
+    topics:
+      - /drone_initialpose
+      - /sync_ack
+      - /sync_request
+    subscribe_namespace: /humanoid/transport
+    publish_namespace: /humanoid/transport

@@ -1,0 +1,12 @@
+[submodule "dependencies/rolling_bonxai"]
+	path = dependencies/rolling_bonxai
+	url = https://github.com/ray710mond/Rolling-Bonxai.git
+[submodule "dependencies/caltech_mapping"]
+	path = dependencies/caltech_mapping
+	url = https://github.com/ray710mond/caltech_mapping.git
+[submodule "dependencies/glim"]
+	path = dependencies/glim
+	url = https://github.com/ray710mond/glim.git
+[submodule "dependencies/glim_ros2"]
+	path = dependencies/glim_ros2
+	url = https://github.com/koide3/glim_ros2.git

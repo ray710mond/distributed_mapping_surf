@@ -1,0 +1,21 @@
+services:
+  surf:
+    volumes:
+      # Use the host checkout directly so source edits are immediately visible.
+      - ../..:/opt/surf_ws/src/distributed_mapping_surf
+      # Apply the development shell environment without rebuilding the image.
+      - ./root.bashrc:/root/.bashrc:ro
+      # Keep incremental build state when the container is replaced.
+      - surf-workspace-build:/opt/surf_ws/build
+      - surf-workspace-install:/opt/surf_ws/install
+      - surf-workspace-log:/opt/surf_ws/log
+
+volumes:
+  # The v2 names intentionally avoid inheriting incompatible artifacts from
+  # the former /opt/surf_dev development overlay.
+  surf-workspace-build:
+    name: surf-workspace-build-v2
+  surf-workspace-install:
+    name: surf-workspace-install-v2
+  surf-workspace-log:
+    name: surf-workspace-log-v2

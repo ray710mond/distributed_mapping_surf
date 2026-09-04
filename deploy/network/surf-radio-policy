@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+config=${SURF_RADIO_POLICY_CONFIG:-/etc/surf/radio-policy.env}
+[[ -r "$config" ]] || exit 0
+# shellcheck disable=SC1090
+source "$config"
+: "${SURF_RADIO_INTERFACES:=}"
+
+apply_one() {
+    local interface=$1
+    [[ -e "/sys/class/net/$interface" ]] || return 0
+    local state output interface_type
+    interface_type=$(iw dev "$interface" info 2>/dev/null | awk '$1 == "type" {print $2; exit}')
+    if [[ $interface_type == AP ]]; then
+        # NL80211_CMD_SET_POWER_SAVE is a station control. Morse AP interfaces
+        # can report "on" through the compatibility API while rejecting the
+        # setter with EOPNOTSUPP; that is not evidence that the AP is sleeping.
+        echo "$interface: AP mode; station power-save policy is not applicable"
+        return 0
+    fi
+    for attempt in 1 2 3 4 5; do
+        output=$(iw dev "$interface" set power_save off 2>&1) || true
+        state=$(iw dev "$interface" get power_save 2>&1) || true
+        if [[ $state == *"Power save: off"* ]]; then
+            echo "$interface: power saving off"
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "$interface: failed to disable station power saving (type=${interface_type:-unknown}); set='$output', state='$state'" >&2
+    return 1
+}
+
+if [[ $# -gt 0 ]]; then
+    apply_one "$1"
+else
+    result=0
+    for interface in $SURF_RADIO_INTERFACES; do
+        apply_one "$interface" || result=1
+    done
+    exit "$result"
+fi

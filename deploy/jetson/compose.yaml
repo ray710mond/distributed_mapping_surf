@@ -1,0 +1,55 @@
+services:
+  surf:
+    image: surf-jazzy:${SURF_IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: deploy/jetson/Dockerfile
+      args:
+        # Use the exact px4_msgs commit from the host workspace when possible.
+        # A matching PX4 release branch (for example release/1.15) also works.
+        PX4_MSGS_REF: ${PX4_MSGS_REF:?Set PX4_MSGS_REF to the px4_msgs commit or release branch matching PX4}
+      additional_contexts:
+        livox_sdk2: ${LIVOX_SDK2_SOURCE:?Set LIVOX_SDK2_SOURCE to the absolute Livox-SDK2 source path}
+      # Jetson kernels may not expose the legacy iptables raw table Docker
+      # expects when creating a temporary docker0 endpoint. Building on the
+      # host network also matches this image's Ethernet sensor deployment.
+      network: host
+    platform: ${SURF_PLATFORM:-linux/arm64}
+    working_dir: /opt/surf_ws
+    # The radio subnets are host interfaces, not Docker bridge networks.
+    # Host mode exposes the drone's sensor Ethernet and robot-to-robot radio
+    # interfaces directly to the Livox driver and transport bridges.
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID in the Jetson env file}
+      LIVOX_HOST_IP: ${LIVOX_HOST_IP:?Set LIVOX_HOST_IP in the Jetson env file}
+      LIVOX_LIDAR_IP: ${LIVOX_LIDAR_IP:?Set LIVOX_LIDAR_IP in the Jetson env file}
+      # Used as the default for hardware.launch.py's map_name argument. It can
+      # still be overridden per launch with map_name:=<name>.
+      SURF_MAP_NAME: ${SURF_MAP_NAME:-amberlab}
+      SURF_MAP_DIRECTORY: /opt/surf_ws/maps
+      # Make a plain `colcon build` reproduce the image's headless Jetson
+      # profile. In particular, GLIM must not require Iridescence or CUDA.
+      COLCON_DEFAULTS_FILE: /config/colcon-defaults.yaml
+    volumes:
+      - ./colcon-defaults.yaml:/config/colcon-defaults.yaml:ro
+      - ./config/MID360_config.json:/config/MID360_config.json:ro
+      - ./config/drone_transport.yaml:/config/drone_transport.yaml:ro
+      # Keep private/site-specific maps outside the public source repository.
+      - ${SURF_MAP_DIRECTORY:?Set SURF_MAP_DIRECTORY to an absolute host path}:/opt/surf_ws/maps
+      - surf-data:/data
+      # A host-visible submount allows retry-safe post-run rsync collection.
+      - ${SURF_TELEMETRY_DIRECTORY:?Set SURF_TELEMETRY_DIRECTORY to an absolute host path}:/data/telemetry
+      # Root's host exporter publishes only the two physical Morse metric files.
+      - /run/surf-halow-telemetry:/run/surf-halow-telemetry:ro
+      # Fresh Chrony verification produced by surf-jetson-test-mode.
+      - /run/surf-clock-sync:/run/surf-clock-sync:ro
+    command: [sleep, infinity]
+
+volumes:
+  surf-data:
+    name: surf-data

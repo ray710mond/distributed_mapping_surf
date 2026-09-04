@@ -1,0 +1,11 @@
+[Unit]
+Description=SURF standalone robot 5 GHz access point
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/start-surf-hotspot
+ExecStop=/usr/local/sbin/stop-surf-hotspot
+TimeoutStartSec=30
