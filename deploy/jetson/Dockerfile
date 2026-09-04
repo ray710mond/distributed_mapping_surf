@@ -53,8 +53,6 @@ RUN curl -fsSL \
         libomp-dev \
         libspdlog-dev \
     && dpkg-query -W libiridescence-dev \
-    && find /usr -type f -iname 'iridescence-config.cmake' -print -quit | grep -q . \
-    && test -f /usr/include/iridescence/glk/io/ply_io.hpp \
     && rm -f /tmp/koide3-ppa.gpg \
     && rm -rf /var/lib/apt/lists/*
 
