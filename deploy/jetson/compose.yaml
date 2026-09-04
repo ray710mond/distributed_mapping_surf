@@ -30,9 +30,6 @@ services:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID in the Jetson env file}
       LIVOX_HOST_IP: ${LIVOX_HOST_IP:?Set LIVOX_HOST_IP in the Jetson env file}
       LIVOX_LIDAR_IP: ${LIVOX_LIDAR_IP:?Set LIVOX_LIDAR_IP in the Jetson env file}
-      # Used as the default for hardware.launch.py's map_name argument. It can
-      # still be overridden per launch with map_name:=<name>.
-      SURF_MAP_NAME: ${SURF_MAP_NAME:-amberlab}
       SURF_MAP_DIRECTORY: /opt/surf_ws/maps
       # Make a plain `colcon build` reproduce the image's CPU-only GLIM
       # profile. Viewer support remains on because relocalization_bringup's
