@@ -67,6 +67,11 @@ does not vendor that package. `surf_bringup` and `surf_slam` are included to
 preserve the complete current source set, but the portable launch does not
 invoke their Livox/LIO/GLIM hardware pipeline.
 
+The Jetson Compose deployment is intended to be launched from the parent
+`SURF_2026` checkout. Its build context includes this repository and the
+sibling `LIO-Localization` submodule so `/opt/surf_ws/src` contains the entire
+testing workspace.
+
 ## Launch against an existing robot stack
 
 Copy the example, edit every topic/frame/address for that robot, then launch:

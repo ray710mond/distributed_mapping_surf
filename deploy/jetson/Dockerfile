@@ -48,6 +48,7 @@ RUN curl -fsSL \
         libboost-all-dev \
         libfmt-dev \
         libgtsam-points-dev \
+        libiridescence-dev \
         libmetis-dev \
         libomp-dev \
         libspdlog-dev \
@@ -118,20 +119,17 @@ RUN mkdir -p /opt/px4_ws/src \
         /opt/px4_ws/src/px4_msgs/.git
 
 WORKDIR /opt/surf_ws
-COPY dependencies src/distributed_mapping_surf/dependencies
-COPY surf_bringup src/distributed_mapping_surf/surf_bringup
-COPY surf_data_tracker src/distributed_mapping_surf/surf_data_tracker
-COPY surf_drone src/distributed_mapping_surf/surf_drone
-COPY surf_humanoid src/distributed_mapping_surf/surf_humanoid
-COPY surf_multirobot_comms src/distributed_mapping_surf/surf_multirobot_comms
-COPY surf_multirobot_msgs src/distributed_mapping_surf/surf_multirobot_msgs
-COPY surf_portable_bringup src/distributed_mapping_surf/surf_portable_bringup
-COPY surf_slam src/distributed_mapping_surf/surf_slam
+COPY surf_ws/src/distributed_mapping_surf src/distributed_mapping_surf
+COPY surf_ws/src/LIO-Localization src/LIO-Localization
 
+# relocalization_bringup consumes GLIM without declaring it as a package
+# dependency. Install the exact pinned source as a CMake underlay so the
+# full-workspace colcon build can configure deterministically.
 RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech_bonxai_builder/package.xml || \
           ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech_map_bringup/package.xml || \
           ! -f src/distributed_mapping_surf/dependencies/glim/package.xml || \
-          ! -f src/distributed_mapping_surf/dependencies/glim_ros2/package.xml ]]; then \
+          ! -f src/distributed_mapping_surf/dependencies/glim_ros2/package.xml || \
+          ! -f src/LIO-Localization/ws_lio_loc/src/relocalization_bringup/package.xml ]]; then \
         echo "A required mapping submodule is missing; run git submodule update --init --recursive before building" >&2; \
         exit 1; \
     fi \
@@ -148,6 +146,18 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
     && source /opt/ros/jazzy/setup.bash \
     && source /opt/livox_ws/install/setup.bash \
     && source /opt/px4_ws/install/local_setup.bash \
+    && cmake \
+        -S src/distributed_mapping_surf/dependencies/glim \
+        -B /tmp/glim-underlay-build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/glim-underlay \
+        -DBUILD_WITH_CUDA=OFF \
+        -DBUILD_WITH_VIEWER=ON \
+        -DBUILD_WITH_OPENCV=OFF \
+    && cmake --build /tmp/glim-underlay-build --parallel "${BUILD_JOBS}" \
+    && cmake --install /tmp/glim-underlay-build \
+    && rm -rf /tmp/glim-underlay-build \
+    && export CMAKE_PREFIX_PATH="/opt/glim-underlay:${CMAKE_PREFIX_PATH:-}" \
     && colcon build \
         --parallel-workers "${BUILD_JOBS}" \
         --merge-install \
@@ -156,7 +166,7 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTING=OFF \
             -DBUILD_WITH_CUDA=OFF \
-            -DBUILD_WITH_VIEWER=OFF \
+            -DBUILD_WITH_VIEWER=ON \
             -DBUILD_WITH_OPENCV=OFF \
             -DBUILD_WITH_CV_BRIDGE=OFF \
     && source /opt/ros/jazzy/setup.bash \
@@ -168,7 +178,9 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
     && ros2 pkg prefix caltech_map_bringup \
     && ros2 pkg prefix glim \
     && ros2 pkg prefix glim_ros \
+    && ros2 pkg prefix relocalization_bringup \
     && ros2 pkg prefix surf_slam \
+    && test -x /opt/surf/lib/relocalization_bringup/glim_optimize_export \
     && test -x /opt/surf/lib/caltech_bonxai_builder/bonxai_pcd_converter \
     && test -x /opt/surf/lib/caltech_bonxai_builder/pcd_to_ros_occupancy.py \
     && rm -rf build log

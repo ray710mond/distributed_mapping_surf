@@ -2,8 +2,10 @@ services:
   surf:
     image: surf-jazzy:${SURF_IMAGE_TAG:-latest}
     build:
-      context: ../..
-      dockerfile: deploy/jetson/Dockerfile
+      # Build from the private parent repository so the image contains both
+      # LIO-Localization and distributed_mapping_surf.
+      context: ../../../../..
+      dockerfile: surf_ws/src/distributed_mapping_surf/deploy/jetson/Dockerfile
       args:
         # Use the exact px4_msgs commit from the host workspace when possible.
         # A matching PX4 release branch (for example release/1.15) also works.
@@ -32,8 +34,9 @@ services:
       # still be overridden per launch with map_name:=<name>.
       SURF_MAP_NAME: ${SURF_MAP_NAME:-amberlab}
       SURF_MAP_DIRECTORY: /opt/surf_ws/maps
-      # Make a plain `colcon build` reproduce the image's headless Jetson
-      # profile. In particular, GLIM must not require Iridescence or CUDA.
+      # Make a plain `colcon build` reproduce the image's CPU-only GLIM
+      # profile. Viewer support remains on because relocalization_bringup's
+      # map exporter uses Iridescence/GLK.
       COLCON_DEFAULTS_FILE: /config/colcon-defaults.yaml
     volumes:
       - ./colcon-defaults.yaml:/config/colcon-defaults.yaml:ro
