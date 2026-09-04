@@ -12,7 +12,13 @@ if [[ ! $RUN_ID =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
     exit 2
 fi
 
-PROJECT_ROOT=${SURF_PROJECT_ROOT:?Set SURF_PROJECT_ROOT to the distributed_mapping_surf checkout}
+if [[ -r /etc/surf/repository.env ]]; then
+    # Installed by install-surf-cli.sh; keep the command independent of the
+    # caller's working directory and shell environment.
+    source /etc/surf/repository.env
+fi
+PROJECT_ROOT=${SURF_PROJECT_ROOT:-${SURF_REPOSITORY:-}}
+: "${PROJECT_ROOT:?Set SURF_PROJECT_ROOT or reinstall the SURF CLI wrappers}"
 TRACKER_SOURCE=${SURF_TRACKER_SOURCE:-$PROJECT_ROOT/surf_data_tracker}
 LOCAL_EXPERIMENTS=${SURF_LOCAL_EXPERIMENTS:-$TRACKER_SOURCE/experiments}
 DESTINATION=${SURF_EXPERIMENT_DESTINATION:-$PROJECT_ROOT/experiments}

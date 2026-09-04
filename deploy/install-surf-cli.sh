@@ -7,7 +7,7 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 repository=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-install -d -m 0755 /etc/surf /usr/local/bin
+install -d -m 0755 /etc/surf /usr/local/bin /usr/local/sbin
 printf 'SURF_REPOSITORY=%q\n' "$repository" > /etc/surf/repository.env
 chmod 0644 /etc/surf/repository.env
 

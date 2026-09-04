@@ -34,6 +34,7 @@
   <exec_depend>surf_data_tracker</exec_depend>
   <exec_depend>surf_drone</exec_depend>
   <exec_depend>surf_humanoid</exec_depend>
+  <exec_depend>surf_portable_bringup</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <export><build_type>ament_cmake</build_type></export>

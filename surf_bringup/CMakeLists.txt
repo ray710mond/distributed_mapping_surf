@@ -26,10 +26,6 @@ install(PROGRAMS scripts/analyze_mid360_bag.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME analyze_mid360_bag
 )
-install(PROGRAMS scripts/global_odometry.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME global_odometry
-)
 install(PROGRAMS scripts/localization_overlap_monitor.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME localization_overlap_monitor

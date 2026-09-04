@@ -12,7 +12,7 @@ services:
 
 volumes:
   # The v2 names intentionally avoid inheriting incompatible artifacts from
-  # the former /opt/surf_dev development overlay.
+  # the earlier development overlay layout.
   surf-workspace-build:
     name: surf-workspace-build-v2
   surf-workspace-install:

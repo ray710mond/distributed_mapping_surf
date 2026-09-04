@@ -395,7 +395,7 @@ def _nodes(context):
 
     actions.extend([
         Node(
-            package='surf_bringup',
+            package='surf_portable_bringup',
             executable='global_odometry',
             namespace=role,
             name='global_odometry',

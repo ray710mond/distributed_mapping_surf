@@ -1,0 +1,16 @@
+.git
+.gitmodules
+**/.git
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+build
+install
+log
+maps/*
+!maps/README.md
+deploy/local/.env
+deploy/jetson/.env
+deploy/jetson/jetson-network.env
+surf_data_tracker/experiments
+dependencies/rolling_bonxai/**/benchmark/results

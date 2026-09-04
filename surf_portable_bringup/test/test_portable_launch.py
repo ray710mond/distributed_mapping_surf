@@ -16,3 +16,5 @@ def test_portable_contract_is_parameterized():
 def test_existing_transport_odometry_contract_is_preserved():
     launch = (Path(__file__).parents[1] / 'launch' / 'portable.launch.py').read_text()
     assert "f'transport/{role}_odometry'" in launch
+    assert "f'/{namespace}/transport/humanoid_odometry'" in launch
+    assert "f'/{namespace}/transport/drone_odometry'" in launch

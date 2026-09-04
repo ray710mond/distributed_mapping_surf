@@ -18,5 +18,6 @@ For Compose, paths inside `robot.yaml` must use the container mount points:
 telemetry directory below `/data/telemetry`. The host paths for those mounts
 belong in `docker/.env`.
 
-Host installers remain hardware-specific and must be run from this extracted
-directory because they install companion files by relative path.
+Host installers remain hardware-specific. Run `deploy/install-surf-cli.sh`
+once from the checkout; the installed commands remember the repository path
+and may then be invoked from any working directory.

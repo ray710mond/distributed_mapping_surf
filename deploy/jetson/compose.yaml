@@ -38,7 +38,7 @@ services:
     volumes:
       - ./colcon-defaults.yaml:/config/colcon-defaults.yaml:ro
       - ./config/MID360_config.json:/config/MID360_config.json:ro
-      - ./config/drone_transport.yaml:/config/drone_transport.yaml:ro
+      - ../../surf_bringup/config/drone_transport.yaml:/config/drone_transport.yaml:ro
       # Keep private/site-specific maps outside the public source repository.
       - ${SURF_MAP_DIRECTORY:?Set SURF_MAP_DIRECTORY to an absolute host path}:/opt/surf_ws/maps
       - surf-data:/data

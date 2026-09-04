@@ -122,6 +122,8 @@ def _setup(context):
             namespace=namespace, name='drone_data_receiver', output='screen',
             parameters=[_node_parameters(document, 'drone_data_receiver'), {
                 'robot_name': namespace,
+                'peer_odometry_topic': (
+                    f'/{namespace}/transport/drone_odometry'),
             }],
         ))
 
