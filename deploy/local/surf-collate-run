@@ -20,9 +20,13 @@ fi
 PROJECT_ROOT=${SURF_PROJECT_ROOT:-${SURF_REPOSITORY:-}}
 : "${PROJECT_ROOT:?Set SURF_PROJECT_ROOT or reinstall the SURF CLI wrappers}"
 TRACKER_SOURCE=${SURF_TRACKER_SOURCE:-$PROJECT_ROOT/surf_data_tracker}
-LOCAL_EXPERIMENTS=${SURF_LOCAL_EXPERIMENTS:-$TRACKER_SOURCE/experiments}
-DESTINATION=${SURF_EXPERIMENT_DESTINATION:-$PROJECT_ROOT/experiments}
-DRONE_EXPERIMENTS=${SURF_DRONE_EXPERIMENTS:?Set SURF_DRONE_EXPERIMENTS to user@peer:/telemetry/path}
+LOCAL_EXPERIMENTS=${SURF_LOCAL_EXPERIMENTS:-$HOME/.local/share/surf/experiments}
+SUITE_ROOT=$(cd "$PROJECT_ROOT/../../.." && pwd)
+if [[ $SUITE_ROOT/surf_ws/src/distributed_mapping_surf != "$PROJECT_ROOT" ]]; then
+    SUITE_ROOT=$PROJECT_ROOT
+fi
+DESTINATION=${SURF_EXPERIMENT_DESTINATION:-$SUITE_ROOT/experiments}
+DRONE_EXPERIMENTS=${SURF_DRONE_EXPERIMENTS:-poisson@10.43.30.1:/home/poisson/SURF_2026/experiments}
 
 if [[ ! -d $TRACKER_SOURCE/surf_data_tracker ]]; then
     echo "surf_data_tracker source not found under $PROJECT_ROOT" >&2
