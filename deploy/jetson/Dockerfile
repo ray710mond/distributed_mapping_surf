@@ -122,6 +122,7 @@ RUN mkdir -p /opt/px4_ws/src \
 WORKDIR /opt/surf_ws
 COPY surf_ws/src/distributed_mapping_surf src/distributed_mapping_surf
 COPY surf_ws/src/LIO-Localization src/LIO-Localization
+COPY surf_ws/src/distributed_mapping_surf/deploy/jetson/cmake/iridescence-headless.cmake /usr/local/share/surf/cmake/iridescence-headless.cmake
 
 # relocalization_bringup consumes GLIM without declaring it as a package
 # dependency. Install the exact pinned source as a CMake underlay so the
@@ -152,8 +153,9 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
         -B /tmp/glim-underlay-build \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/opt/glim-underlay \
+        -DCMAKE_PROJECT_INCLUDE=/usr/local/share/surf/cmake/iridescence-headless.cmake \
         -DBUILD_WITH_CUDA=OFF \
-        -DBUILD_WITH_VIEWER=ON \
+        -DBUILD_WITH_VIEWER=OFF \
         -DBUILD_WITH_OPENCV=OFF \
     && cmake --build /tmp/glim-underlay-build --parallel "${BUILD_JOBS}" \
     && cmake --install /tmp/glim-underlay-build \
@@ -165,9 +167,10 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
         --install-base /opt/surf \
         --cmake-args \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PROJECT_INCLUDE=/usr/local/share/surf/cmake/iridescence-headless.cmake \
             -DBUILD_TESTING=OFF \
             -DBUILD_WITH_CUDA=OFF \
-            -DBUILD_WITH_VIEWER=ON \
+            -DBUILD_WITH_VIEWER=OFF \
             -DBUILD_WITH_OPENCV=OFF \
             -DBUILD_WITH_CV_BRIDGE=OFF \
     && source /opt/ros/jazzy/setup.bash \

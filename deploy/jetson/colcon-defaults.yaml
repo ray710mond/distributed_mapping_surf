@@ -12,6 +12,7 @@ build:
     - -DCMAKE_BUILD_TYPE=RelWithDebInfo
     - -DBUILD_TESTING=OFF
     - -DBUILD_WITH_CUDA=OFF
-    - -DBUILD_WITH_VIEWER=ON
+    - -DBUILD_WITH_VIEWER=OFF
+    - -DCMAKE_PROJECT_INCLUDE=/usr/local/share/surf/cmake/iridescence-headless.cmake
     - -DBUILD_WITH_OPENCV=OFF
     - -DBUILD_WITH_CV_BRIDGE=OFF
