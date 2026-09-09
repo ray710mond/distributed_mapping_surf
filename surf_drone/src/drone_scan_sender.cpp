@@ -38,6 +38,7 @@
 #include "surf_multirobot_msgs/msg/sync_status.hpp"
 #include "surf_multirobot_msgs/msg/voxel_delta.hpp"
 #include "surf_drone/adaptive_mode.hpp"
+#include "surf_drone/communication_state.hpp"
 #include "surf_multirobot_comms/qos_profiles.hpp"
 #include "surf_multirobot_comms/voxel_codec.hpp"
 
@@ -45,29 +46,6 @@ namespace surf_drone
 {
 namespace
 {
-
-struct Coord
-{
-  int32_t x{0};
-  int32_t y{0};
-  int32_t z{0};
-
-  bool operator==(const Coord & other) const noexcept
-  {
-    return x == other.x && y == other.y && z == other.z;
-  }
-};
-
-struct CoordHash
-{
-  std::size_t operator()(const Coord & value) const noexcept
-  {
-    std::size_t seed = std::hash<int32_t>{}(value.x);
-    seed ^= std::hash<int32_t>{}(value.y) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
-    seed ^= std::hash<int32_t>{}(value.z) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
-    return seed;
-  }
-};
 
 struct CellState
 {
@@ -80,13 +58,6 @@ struct CellState
   uint64_t last_observation_time_ns{0U};
 };
 
-Coord quantize(double x, double y, double z, double resolution)
-{
-  return {
-    static_cast<int32_t>(std::floor(x / resolution)),
-    static_cast<int32_t>(std::floor(y / resolution)),
-    static_cast<int32_t>(std::floor(z / resolution))};
-}
 
 void append_record(
   surf_multirobot_msgs::msg::VoxelDelta & delta,
@@ -631,10 +602,10 @@ private:
     }
     std::lock_guard<std::mutex> lock(static_map_mutex_);
     if (!static_prior_initialized_) {
-      static_map_ = std::move(replacement);
+      static_map_ = std::make_shared<const CoordSet>(std::move(replacement));
       static_prior_initialized_ = true;
       RCLCPP_INFO(get_logger(), "Captured %zu voxels in the static communication prior",
-        static_map_.size());
+        static_map_->size());
     }
   }
 
@@ -693,33 +664,6 @@ private:
     }
   }
 
-  struct HumanoidMask
-  {
-    tf2::Vector3 center;
-    tf2::Quaternion world_from_model;
-    double half_x{0.0};
-    double half_y{0.0};
-    double half_z{0.0};
-
-    bool contains(double x, double y, double z) const
-    {
-      const tf2::Vector3 local =
-        tf2::quatRotate(world_from_model.inverse(), tf2::Vector3(x, y, z) - center);
-      return std::abs(local.x()) <= half_x &&
-             std::abs(local.y()) <= half_y &&
-             std::abs(local.z()) <= half_z;
-    }
-
-    bool contains(const Coord & coord, double resolution) const
-    {
-      // Test voxel centers. The configured padding is at least one voxel in
-      // the configured occupancy profile, making boundary quantization conservative.
-      return contains(
-        (static_cast<double>(coord.x) + 0.5) * resolution,
-        (static_cast<double>(coord.y) + 0.5) * resolution,
-        (static_cast<double>(coord.z) + 0.5) * resolution);
-    }
-  };
 
   std::unique_ptr<HumanoidMask> humanoid_mask_at(const builtin_interfaces::msg::Time & stamp)
   {
@@ -843,7 +787,7 @@ private:
     realtime.sensor_origin.y = translation.y();
     realtime.sensor_origin.z = translation.z();
 
-    std::unordered_set<Coord, CoordHash> static_snapshot;
+    std::shared_ptr<const CoordSet> static_snapshot;
     {
       std::lock_guard<std::mutex> lock(static_map_mutex_);
       static_snapshot = static_map_;
@@ -856,27 +800,23 @@ private:
     // tombstones. The humanoid owns this volume and fills it from its onboard
     // sensor; the drone's separate local map still receives the untouched scan.
     if (humanoid_mask) {
-      for (auto it = cells_.begin(); it != cells_.end();) {
-        if (humanoid_mask->contains(it->first, resolution_)) {
-          tombstones_.erase(it->first);
-          it = cells_.erase(it);
-        } else {
-          ++it;
+      const auto bounds = humanoid_mask->voxel_bounds(resolution_);
+      for (const auto & coord : cells_.in_box(bounds.first, bounds.second)) {
+        if (humanoid_mask->contains(coord, resolution_)) {
+          cells_.erase(coord);
+          dynamic_expiry_.cancel(coord);
+          tombstones_.erase(coord);
         }
       }
-      for (auto it = tombstones_.begin(); it != tombstones_.end();) {
-        if (humanoid_mask->contains(it->first, resolution_)) {
-          it = tombstones_.erase(it);
-        } else {
-          ++it;
-        }
+      for (const auto & coord : tombstones_.in_box(bounds.first, bounds.second)) {
+        if (humanoid_mask->contains(coord, resolution_)) {tombstones_.erase(coord);}
       }
     }
 
     for (const auto & coord : current) {
       tombstones_.erase(coord);
       auto & cell = cells_[coord];
-      const bool represented_by_prior = static_snapshot.find(coord) != static_snapshot.end();
+      const bool represented_by_prior = static_snapshot->find(coord) != static_snapshot->end();
       if (represented_by_prior) {
         ++static_prior_voxels;
       }
@@ -891,6 +831,13 @@ private:
       if (represented_by_prior || cell.consecutive_hits >= static_cast<uint32_t>(static_min_hits_))
       {
         cell.static_known = true;
+      }
+
+      if (cell.static_known) {
+        dynamic_expiry_.cancel(coord);
+      } else {
+        // Preserve the original strict > retention boundary.
+        dynamic_expiry_.schedule(coord, version_ + dynamic_retention_scans_ + 1U);
       }
 
       const bool new_information = cell.last_sent_version == 0U ||
@@ -952,26 +899,22 @@ private:
       if (mode != surf_multirobot_msgs::msg::VoxelDelta::MODE_METADATA_ONLY) {
         append_record(realtime, coord, cleared_state, scan_time_ns);
       }
+      dynamic_expiry_.cancel(coord);
       cells_.erase(found);
     }
 
     // Dynamic cells that are no longer endpoints must not be resurrected by
     // periodic full refreshes merely because no sampled clearing ray hit them.
-    for (auto it = cells_.begin(); it != cells_.end();) {
-      const bool expired_dynamic = !it->second.static_known &&
-        version_ - it->second.last_seen_version >
-        static_cast<uint64_t>(dynamic_retention_scans_);
-      if (!expired_dynamic) {
-        ++it;
-        continue;
-      }
-      tombstones_[it->first] = {
+    for (const auto & coord : dynamic_expiry_.pop_due(version_)) {
+      auto it = cells_.find(coord);
+      if (it == cells_.end() || it->second.static_known) {continue;}
+      tombstones_[coord] = {
         version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns};
       if (mode != surf_multirobot_msgs::msg::VoxelDelta::MODE_METADATA_ONLY) {
-        append_record(realtime, it->first,
+        append_record(realtime, coord,
           surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns);
       }
-      it = cells_.erase(it);
+      cells_.erase(it);
     }
     const auto clearing_complete = std::chrono::steady_clock::now();
 
@@ -1381,15 +1324,17 @@ private:
   double last_sync_time_{0.0};
 
   AdaptiveModeController adaptive_;
-  std::unordered_map<Coord, CellState, CoordHash> cells_;
+  SpatialMap<CellState> cells_;
+  DynamicExpiry dynamic_expiry_;
   struct Tombstone
   {
     uint64_t version{0U};
     uint8_t state{surf_multirobot_msgs::msg::VoxelDelta::STATE_DELETE};
     uint64_t observation_time_ns{0U};
   };
-  std::unordered_map<Coord, Tombstone, CoordHash> tombstones_;
-  std::unordered_set<Coord, CoordHash> static_map_;
+  SpatialMap<Tombstone> tombstones_;
+  using CoordSet = std::unordered_set<Coord, CoordHash>;
+  std::shared_ptr<const CoordSet> static_map_{std::make_shared<const CoordSet>()};
   bool static_prior_initialized_{false};
   std::mutex static_map_mutex_;
 

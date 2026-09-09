@@ -10,6 +10,8 @@
     default_rate: 100.0
     default_zstd_level: 1
     publish_stale_data: false
+    /realtime_tx.queue_depth: 256
+    /realtime_tx.queue_bytes: 307200
     topics:
       - /realtime_tx
       # Common-map odometry produced by global_odometry.
@@ -31,6 +33,8 @@
     default_rate: 100.0
     default_zstd_level: 1
     publish_stale_data: false
+    /sync_tx.queue_depth: 256
+    /sync_tx.queue_bytes: 16777216
     topics:
       - /sync_tx
     subscribe_namespace: /drone/transport

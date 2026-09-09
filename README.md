@@ -62,8 +62,10 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-`network_bridge` must be available in the sourced underlay. This repository
-does not vendor that package. `surf_bringup` and `surf_slam` are included to
+`dependencies/network_bridge` vendors version 3.0.0 with bounded FIFO forwarding
+for chunk topics. Build and source it on both hosts; the stock binary package
+uses latest-value forwarding and can overwrite chunks between send ticks.
+See [transport fixes](docs/transport_and_state_fixes.md) for limits and verification. `surf_bringup` and `surf_slam` are included to
 preserve the complete current source set, but the portable launch does not
 invoke their Livox/LIO/GLIM hardware pipeline.
 
