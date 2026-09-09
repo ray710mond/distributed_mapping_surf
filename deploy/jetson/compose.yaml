@@ -6,10 +6,6 @@ services:
       # LIO-Localization and distributed_mapping_surf.
       context: ../../../../..
       dockerfile: surf_ws/src/distributed_mapping_surf/deploy/jetson/Dockerfile
-      args:
-        # Use the exact px4_msgs commit from the host workspace when possible.
-        # A matching PX4 release branch (for example release/1.15) also works.
-        PX4_MSGS_REF: ${PX4_MSGS_REF:?Set PX4_MSGS_REF to the px4_msgs commit or release branch matching PX4}
       additional_contexts:
         livox_sdk2: ${LIVOX_SDK2_SOURCE:?Set LIVOX_SDK2_SOURCE to the absolute Livox-SDK2 source path}
       # Jetson kernels may not expose the legacy iptables raw table Docker

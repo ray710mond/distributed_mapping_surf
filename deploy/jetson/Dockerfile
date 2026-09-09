@@ -3,7 +3,6 @@ FROM ros:jazzy-perception-noble
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG LIVOX_ROS_DRIVER2_REF=1.2.6
-ARG PX4_MSGS_REF=release/1.15
 ARG BUILD_JOBS=4
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -98,27 +97,6 @@ RUN mkdir -p /opt/livox_ws/src \
     && rm -rf /opt/livox_ws/build /opt/livox_ws/log \
         /opt/livox_ws/src/livox_ros_driver2/.git
 
-# The uXRCE-DDS Agent stays on the Jetson host. Only the ROS interface package
-# is built here, against Jazzy, so the container can deserialize the DDS topics
-# without depending on the host's Humble install space. PX4_MSGS_REF must match
-# the PX4 firmware; pinning the commit used by the host workspace is safest.
-RUN mkdir -p /opt/px4_ws/src \
-    && git clone https://github.com/PX4/px4_msgs.git \
-        /opt/px4_ws/src/px4_msgs \
-    && git -C /opt/px4_ws/src/px4_msgs checkout "${PX4_MSGS_REF}" \
-    && source /opt/ros/jazzy/setup.bash \
-    && cd /opt/px4_ws \
-    && colcon build \
-        --parallel-workers "${BUILD_JOBS}" \
-        --merge-install \
-        --cmake-args \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_TESTING=OFF \
-    && source /opt/px4_ws/install/local_setup.bash \
-    && ros2 interface show px4_msgs/msg/SensorCombined >/dev/null \
-    && rm -rf /opt/px4_ws/build /opt/px4_ws/log \
-        /opt/px4_ws/src/px4_msgs/.git
-
 WORKDIR /opt/surf_ws
 COPY surf_ws/src/distributed_mapping_surf src/distributed_mapping_surf
 COPY surf_ws/src/LIO-Localization src/LIO-Localization
@@ -147,7 +125,6 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
     && rm -rf /var/lib/apt/lists/* \
     && source /opt/ros/jazzy/setup.bash \
     && source /opt/livox_ws/install/setup.bash \
-    && source /opt/px4_ws/install/local_setup.bash \
     && cmake \
         -S src/distributed_mapping_surf/dependencies/glim \
         -B /tmp/glim-underlay-build \
@@ -175,7 +152,6 @@ RUN if [[ ! -f src/distributed_mapping_surf/dependencies/caltech_mapping/caltech
             -DBUILD_WITH_CV_BRIDGE=OFF \
     && source /opt/ros/jazzy/setup.bash \
     && source /opt/livox_ws/install/setup.bash \
-    && source /opt/px4_ws/install/local_setup.bash \
     && source /opt/surf/local_setup.bash \
     && ros2 pkg prefix livox_ros_driver2 \
     && ros2 pkg prefix caltech_bonxai_builder \

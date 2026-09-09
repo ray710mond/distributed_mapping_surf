@@ -3,8 +3,7 @@ set -e
 
 source /opt/ros/jazzy/setup.bash
 source /opt/livox_ws/install/setup.bash
-source /opt/px4_ws/install/local_setup.bash
-# The ROS, Livox, and PX4 underlays are sourced explicitly above. Use SURF's
+# The ROS and Livox underlays are sourced explicitly above. Use SURF's
 # local setup so its generated parent-prefix chain cannot replace the overlays.
 source /opt/surf/local_setup.bash
 # The development Compose override uses the conventional workspace install

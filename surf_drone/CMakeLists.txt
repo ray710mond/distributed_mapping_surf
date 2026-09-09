@@ -8,10 +8,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(ament_cmake REQUIRED)
-find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(px4_msgs QUIET)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(surf_multirobot_comms REQUIRED)
@@ -33,19 +31,7 @@ ament_target_dependencies(drone_scan_sender
   tf2 tf2_geometry_msgs tf2_ros)
 target_link_libraries(drone_scan_sender drone_communication_core Threads::Threads)
 
-set(surf_drone_targets drone_communication_core drone_scan_sender)
-if(px4_msgs_FOUND)
-  add_executable(px4_state_bridge src/px4_state_bridge.cpp)
-  ament_target_dependencies(px4_state_bridge
-    diagnostic_msgs geometry_msgs nav_msgs px4_msgs rclcpp sensor_msgs tf2)
-  list(APPEND surf_drone_targets px4_state_bridge)
-else()
-  message(WARNING
-    "px4_msgs was not found; building surf_drone without px4_state_bridge. "
-    "Source a matching px4_msgs workspace and rebuild to enable PX4 support.")
-endif()
-
-install(TARGETS ${surf_drone_targets}
+install(TARGETS drone_communication_core drone_scan_sender
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME} INCLUDES DESTINATION include)
 install(DIRECTORY include/ DESTINATION include)

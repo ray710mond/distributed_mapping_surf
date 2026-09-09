@@ -6,11 +6,8 @@
   <maintainer email="raymond@todo.invalid">Raymond</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
-  <!-- Optional: CMake builds px4_state_bridge only when a matching px4_msgs
-       workspace is already sourced. The Docker image supplies that underlay. -->
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>surf_multirobot_comms</depend>
