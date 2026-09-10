@@ -18,4 +18,9 @@ ament_target_dependencies(
 
 install(TARGETS drone_data_receiver DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_sync_recovery test/test_sync_recovery.cpp TIMEOUT 60)
+  ament_target_dependencies(test_sync_recovery rclcpp surf_multirobot_comms surf_multirobot_msgs)
+endif()
 ament_package()

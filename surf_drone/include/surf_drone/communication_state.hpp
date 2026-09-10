@@ -28,6 +28,17 @@ struct CoordHash
   }
 };
 
+struct CellState
+{
+  uint32_t consecutive_hits{0};
+  uint32_t consecutive_misses{0};
+  uint64_t last_seen_version{0};
+  uint64_t last_sent_version{0};
+  bool static_known{false};
+  bool last_sent_static{false};
+  uint64_t last_observation_time_ns{0U};
+};
+
 inline Coord quantize(double x, double y, double z, double resolution)
 {
   return {

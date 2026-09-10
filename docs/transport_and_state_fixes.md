@@ -39,9 +39,10 @@ not a new end-to-end retransmission protocol.
 Local chunk publishers/subscribers use reliable DDS with 256 samples of
 history. The receiving bridge also retains 256 samples for
 `CompressedVoxelDelta`. Reliable local DDS does not change HaLow UDP to TCP.
-Sync still uses the existing retry protocol and 5 GHz TCP link. These changes
-are not the proposed single-network architecture or a repair of every possible
-TCP reconnection failure.
+Sync still uses the 5 GHz TCP link. Full-snapshot supersession and recovery
+are described in [snapshot recovery](snapshot_recovery.md). These changes are
+not the proposed single-network architecture or a repair of every possible TCP
+reconnection failure.
 
 Build and source the workspace on both hosts, including `network_bridge`,
 `surf_multirobot_comms`, `surf_drone`, `surf_humanoid`, and `surf_bringup`.

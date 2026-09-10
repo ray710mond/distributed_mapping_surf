@@ -6,6 +6,7 @@ commit `b58c0fe19cbb52d1b3ba8fe3b6873f82124d767c` (MIT).
 Local changes:
 
 - Opt-in per-topic FIFO message/byte limits, with explicit overflow logging.
+- Opt-in latest-full-snapshot generation filtering for SURF chunk metadata.
 - FIFO subscription DDS depth matches its configured message limit.
 - Receiving `CompressedVoxelDelta` publishers retain 256 DDS samples.
 - Queue regressions and a ROS/UDP burst integration test.

@@ -25,13 +25,16 @@ SOFTWARE.
 */
 
 #include <stdexcept>
+#include "surf_multirobot_msgs/msg/compressed_voxel_delta.hpp"
+#include "rclcpp/serialization.hpp"
 #include <rclcpp/qos.hpp>
 #include "network_bridge/subscription_manager.hpp"
 
 SubscriptionManager::SubscriptionManager(
   const rclcpp::Node::SharedPtr & node, const std::string & topic,
   const std::string & subscribe_namespace, int zstd_compression_level,
-  bool publish_stale_data, std::size_t queue_depth, std::size_t queue_bytes)
+  bool publish_stale_data, std::size_t queue_depth, std::size_t queue_bytes,
+  bool latest_snapshot)
 : node_(node),
   msg_type_(),
   topic_(topic),
@@ -42,10 +45,14 @@ SubscriptionManager::SubscriptionManager(
   publish_stale_data_(publish_stale_data),
   data_(),
   queue_depth_(queue_depth),
-  queue_bytes_(queue_bytes)
+  queue_bytes_(queue_bytes),
+  latest_snapshot_(latest_snapshot)
 {
   if (queue_depth_ > 0 && queue_bytes_ == 0) {
     throw std::invalid_argument("Queued topics require a positive queue byte limit");
+  }
+  if (latest_snapshot_ && queue_depth_ == 0) {
+    throw std::invalid_argument("Latest snapshot forwarding requires a bounded FIFO");
   }
   topic_found_ = true;   // optimistic
 }
@@ -133,6 +140,41 @@ void SubscriptionManager::callback(
     "Received message on topic %s", topic_.c_str());
   if (queue_depth_ > 0) {
     const auto size = serialized_msg->size();
+    if (latest_snapshot_) {
+      // Only unsent chunks can be cancelled here. The receiver also rejects
+      // superseded generations to cover chunks already handed to the socket.
+      using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
+      Packet packet;
+      try {
+        rclcpp::Serialization<Packet> serializer;
+        serializer.deserialize_message(serialized_msg.get(), &packet);
+      } catch (const std::exception & error) {
+        RCLCPP_WARN(node_->get_logger(), "Invalid snapshot message: %s", error.what());
+        return;
+      }
+      if (!packet.full_refresh || packet.traffic_class != Packet::TRAFFIC_SYNC ||
+        packet.chunk_index >= std::max(packet.chunk_count, 1U) || size > queue_bytes_)
+      {
+        RCLCPP_WARN(node_->get_logger(), "Rejected invalid/oversized snapshot chunk");
+        return;
+      }
+      if (have_snapshot_ && packet.source_id != snapshot_source_) {
+        RCLCPP_WARN(node_->get_logger(), "Snapshot topic must have a single source");
+        return;
+      }
+      if (have_snapshot_ && packet.map_epoch == snapshot_epoch_ &&
+        packet.version < snapshot_version_) {return;}
+      if (!have_snapshot_ || packet.map_epoch != snapshot_epoch_ ||
+        packet.version > snapshot_version_)
+      {
+        pending_.clear();
+        pending_bytes_ = 0;
+        snapshot_source_ = packet.source_id;
+        snapshot_epoch_ = packet.map_epoch;
+        snapshot_version_ = packet.version;
+        have_snapshot_ = true;
+      }
+    }
     // Reject newest on overflow; never silently overwrite an earlier chunk.
     if (pending_.size() >= queue_depth_ || size > queue_bytes_ - pending_bytes_) {
       ++dropped_messages_;

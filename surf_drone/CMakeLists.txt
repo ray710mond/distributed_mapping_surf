@@ -39,6 +39,11 @@ install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_sync_supersession test/test_sync_supersession.cpp TIMEOUT 60)
+  ament_target_dependencies(test_sync_supersession
+    geometry_msgs nav_msgs rclcpp sensor_msgs surf_multirobot_comms surf_multirobot_msgs
+    tf2 tf2_geometry_msgs tf2_ros)
+  target_link_libraries(test_sync_supersession drone_communication_core Threads::Threads)
   ament_add_gtest(test_communication_state test/test_communication_state.cpp)
   target_include_directories(test_communication_state PRIVATE include)
   ament_target_dependencies(test_communication_state tf2)

@@ -14,6 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(surf_multirobot_msgs REQUIRED)
 find_package(tf2_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(pluginlib REQUIRED)
@@ -25,7 +26,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_chunk_queue test/test_chunk_queue.cpp src/subscription_manager.cpp)
   target_include_directories(test_chunk_queue PRIVATE include)
-  target_link_libraries(test_chunk_queue rclcpp::rclcpp)
+  target_link_libraries(test_chunk_queue rclcpp::rclcpp ${surf_multirobot_msgs_TARGETS})
   find_package(launch_testing_ament_cmake REQUIRED)
   find_package(ament_lint_auto REQUIRED)
   set(ament_cmake_copyright_FOUND TRUE)
@@ -62,6 +63,7 @@ add_library(tcp_interface SHARED
 
 target_link_libraries(network_bridge PUBLIC
   ${std_msgs_TARGETS}
+  ${surf_multirobot_msgs_TARGETS}
   ${tf2_msgs_TARGETS}
   pluginlib::pluginlib
   rclcpp::rclcpp

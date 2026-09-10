@@ -191,10 +191,13 @@ void NetworkBridge::load_parameters()
       if (queue_depth < 0 || queue_bytes < 0) {
         throw std::invalid_argument("Topic queue limits must be nonnegative");
       }
+      const auto latest_snapshot = this->declare_parameter<bool>(
+        topic + ".latest_snapshot", false);
       auto manager = std::make_shared<SubscriptionManager>(
         shared_from_this(), topic, subscribe_namespace,
         zstd_level, publish_stale_data,
-        static_cast<std::size_t>(queue_depth), static_cast<std::size_t>(queue_bytes));
+        static_cast<std::size_t>(queue_depth), static_cast<std::size_t>(queue_bytes),
+        latest_snapshot);
       manager->setup_subscription();
       sub_mgrs_.push_back(manager);
 

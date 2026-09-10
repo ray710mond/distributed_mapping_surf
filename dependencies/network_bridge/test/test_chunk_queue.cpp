@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include "rclcpp/serialization.hpp"
+#include "surf_multirobot_msgs/msg/compressed_voxel_delta.hpp"
 #include "network_bridge/subscription_manager.hpp"
 
 class ChunkQueueTest : public ::testing::Test
@@ -66,4 +68,39 @@ TEST_F(ChunkQueueTest, OverflowDoesNotOverwriteAndBudgetIsReclaimed)
     EXPECT_EQ(fifo.get_data(valid)[0], 3);
     EXPECT_FALSE(fifo.has_data());  // Stale replay must never apply to queued chunks.
   }
+}
+
+TEST_F(ChunkQueueTest, LatestSnapshotRetainsAllNewChunksAndPurgesOldBacklog)
+{
+  using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
+  SubscriptionManager fifo(node, "/sync", "", 1, false, 256, 1048576, true);
+  rclcpp::Serialization<Packet> serializer;
+  auto send = [&](uint64_t version, uint32_t index, uint64_t epoch = 7) {
+      Packet packet;
+      packet.source_id = "drone"; packet.map_epoch = epoch;
+      packet.full_refresh = true; packet.traffic_class = Packet::TRAFFIC_SYNC;
+      packet.version = version; packet.chunk_index = index; packet.chunk_count = 3;
+      auto message = std::make_shared<rclcpp::SerializedMessage>();
+      serializer.serialize_message(&packet, message.get());
+      fifo.callback(message);
+    };
+  send(159, 0); send(159, 1); send(159, 2);  // Disconnected: no send ticks.
+  send(270, 2); send(159, 0); send(270, 0); send(270, 1);
+  for (uint32_t index : {2U, 0U, 1U}) {
+    bool valid = false;
+    const auto & bytes = fifo.get_data(valid);
+    ASSERT_TRUE(valid);
+    rclcpp::SerializedMessage message(bytes.size());
+    std::copy(bytes.begin(), bytes.end(), message.get_rcl_serialized_message().buffer);
+    message.get_rcl_serialized_message().buffer_length = bytes.size();
+    Packet packet;
+    serializer.deserialize_message(&message, &packet);
+    EXPECT_EQ(packet.version, 270U);
+    EXPECT_EQ(packet.chunk_index, index);
+  }
+  EXPECT_FALSE(fifo.has_data());
+  send(159, 1);  // Watermark survives queue drain.
+  EXPECT_FALSE(fifo.has_data());
+  send(1, 0, 8);  // A new sender epoch can restart numbering.
+  EXPECT_TRUE(fifo.has_data());
 }

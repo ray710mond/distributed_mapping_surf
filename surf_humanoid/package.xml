@@ -9,5 +9,6 @@
   <depend>rclcpp</depend>
   <depend>surf_multirobot_comms</depend>
   <depend>surf_multirobot_msgs</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

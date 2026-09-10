@@ -47,17 +47,6 @@ namespace surf_drone
 namespace
 {
 
-struct CellState
-{
-  uint32_t consecutive_hits{0};
-  uint32_t consecutive_misses{0};
-  uint64_t last_seen_version{0};
-  uint64_t last_sent_version{0};
-  bool static_known{false};
-  bool last_sent_static{false};
-  uint64_t last_observation_time_ns{0U};
-};
-
 
 void append_record(
   surf_multirobot_msgs::msg::VoxelDelta & delta,
@@ -87,8 +76,8 @@ double steady_seconds()
 class DroneScanSender : public rclcpp::Node
 {
 public:
-  DroneScanSender()
-  : Node("drone_scan_sender"),
+  explicit DroneScanSender(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+  : Node("drone_scan_sender", options),
     adaptive_(load_adaptive_config())
   {
     robot_name_ = declare_parameter<std::string>("robot_name", "drone");
@@ -316,6 +305,9 @@ private:
   {
     std::lock_guard<std::mutex> lock(transport_queue_mutex_);
     if (traffic_class == surf_multirobot_msgs::msg::CompressedVoxelDelta::TRAFFIC_SYNC) {
+      // Supersede the whole generation, including its unsent retry chunks.
+      // An ACK for the obsolete generation cannot clear this replacement.
+      sync_packet_queue_.clear();
       pending_sync_packets_ = packets;
       pending_sync_epoch_ = packets.empty() ? 0U : packets.front().map_epoch;
       pending_sync_version_ = packets.empty() ? 0U : packets.front().version;
@@ -341,12 +333,6 @@ private:
     for (auto & packet : packets) {
       queue.push_back(std::move(packet));
     }
-  }
-
-  bool has_pending_sync()
-  {
-    std::lock_guard<std::mutex> lock(transport_queue_mutex_);
-    return !pending_sync_packets_.empty();
   }
 
   void retry_unacknowledged_sync()
@@ -941,7 +927,12 @@ private:
     const double now = steady_seconds();
     const bool sync_due = sync_interval_seconds_ > 0.0 &&
       now - last_sync_time_ >= next_sync_interval_seconds_.load();
-    if ((sync_due || immediate_sync_requested_.load()) && !has_pending_sync())
+    // Pending ACKs must not prevent generating a newer full snapshot. Bound
+    // request-driven encoding too, so repeated gap requests cannot continually
+    // supersede a snapshot before it has a chance to finish transmitting.
+    const bool requested_sync_due = immediate_sync_requested_.load() &&
+      now - last_sync_time_ >= std::max(1.0, sync_interval_seconds_);
+    if (sync_due || requested_sync_due)
     {
       immediate_sync_requested_.store(false);
       surf_multirobot_msgs::msg::VoxelDelta sync;
@@ -1405,6 +1396,7 @@ private:
 
 }  // namespace surf_drone
 
+#ifndef SURF_NODE_TEST
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
@@ -1412,3 +1404,5 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+
+#endif

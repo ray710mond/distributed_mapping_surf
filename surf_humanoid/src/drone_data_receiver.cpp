@@ -18,6 +18,7 @@
 #include "surf_multirobot_msgs/msg/voxel_delta.hpp"
 #include "surf_multirobot_comms/qos_profiles.hpp"
 #include "surf_multirobot_comms/voxel_codec.hpp"
+#include "surf_multirobot_comms/snapshot_recovery.hpp"
 
 namespace surf_humanoid
 {
@@ -25,8 +26,8 @@ namespace surf_humanoid
 class DroneDataReceiver : public rclcpp::Node
 {
 public:
-  DroneDataReceiver()
-  : Node("drone_data_receiver")
+  explicit DroneDataReceiver(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+  : Node("drone_data_receiver", options)
   {
     robot_name_ = declare_parameter<std::string>("robot_name", "humanoid");
     realtime_topic_ = declare_parameter<std::string>(
@@ -45,6 +46,8 @@ public:
       "metrics_topic", "/" + robot_name_ + "/comm/delivery_metrics");
     maximum_uncompressed_bytes_ = static_cast<std::size_t>(std::max<int64_t>(
       1024, declare_parameter<int64_t>("maximum_uncompressed_bytes", 64 * 1024 * 1024)));
+    maximum_realtime_history_bytes_ = static_cast<std::size_t>(std::max<int64_t>(
+      1024, declare_parameter<int64_t>("maximum_realtime_history_bytes", 64 * 1024 * 1024)));
     peer_odometry_topic_ = declare_parameter<std::string>(
       "peer_odometry_topic", "/humanoid/transport/drone_odometry");
     peer_box_size_x_ = std::max(
@@ -119,7 +122,7 @@ private:
       std::vector<surf_multirobot_msgs::msg::VoxelDelta> chunks;
       std::vector<bool> received;
     } realtime_assembly, sync_assembly;
-    std::map<uint64_t, surf_multirobot_msgs::msg::VoxelDelta> deferred_realtime;
+    surf::comms::SnapshotRecovery recovery;
     uint64_t epoch{0U};
     uint64_t last_version{0U};
     uint64_t last_full_refresh_version{0U};
@@ -179,6 +182,7 @@ private:
       }
       publish_epoch_reset(*packet);
       source = SourceState{};
+      source.recovery = surf::comms::SnapshotRecovery(maximum_realtime_history_bytes_);
       source.epoch = packet->map_epoch;
       source.awaiting_full_refresh = true;
       source.initialized = true;
@@ -206,25 +210,40 @@ private:
       return;
     }
 
+    auto reject = [&](const std::string & reason, bool request_new = false) {
+        metrics.accepted = false;
+        metrics.rejection_reason = reason;
+        metrics_publisher_->publish(metrics);
+        if (request_new) {request_sync(*packet, source.last_version, reason);}
+      };
     if (packet->full_refresh) {
-      const bool continuing_refresh =
-        source.sync_assembly.version == packet->version &&
-        source.sync_assembly.count == chunk_count;
-      if (!continuing_refresh &&
-        (packet->version < source.last_full_refresh_version ||
-        packet->version < source.last_version))
+      if (!source.awaiting_full_refresh &&
+        packet->version == source.last_full_refresh_version &&
+        packet->version == source.recovery.latest_snapshot())
       {
+        // Lost ACK: acknowledge the completed generation again, without
+        // applying its map twice or waiting for all duplicate chunks.
+        publish_sync_ack(*packet);
+        reject("full refresh already applied; acknowledgment repeated");
+        return;
+      }
+      const auto reason = source.recovery.rejection(packet->version);
+      if (!reason.empty()) {
+        reject(reason, packet->version < source.recovery.history_floor());
+        if (source.sync_assembly.version == packet->version) {
+          source.sync_assembly = SourceState::Assembly{};
+        }
         return;
       }
     } else {
-      if (packet->version <= source.last_version) {
+      if (packet->version <= source.last_version ||
+        packet->version < source.realtime_assembly.version)
+      {
+        reject("superseded realtime update");
         return;
       }
       if (source.last_version > 0U && packet->base_version > source.last_version) {
         request_sync(*packet, source.last_version, "real-time version gap");
-        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-          "Version gap for %s: have %lu, received base %lu/version %lu",
-          packet->source_id.c_str(), source.last_version, packet->base_version, packet->version);
       }
     }
 
@@ -247,6 +266,13 @@ private:
       RCLCPP_WARN(get_logger(), "Rejected voxel packet from %s: %s",
         packet->source_id.c_str(), result.error.c_str());
       return;
+    }
+
+    if (packet->full_refresh) {
+      if (packet->version > source.recovery.latest_snapshot()) {
+        source.sync_assembly = SourceState::Assembly{};
+      }
+      source.recovery.begin(packet->version);
     }
 
     if (chunk_count > 1U) {
@@ -288,13 +314,13 @@ private:
       delta.chunk_count = 1U;
       assembly = SourceState::Assembly{};
     }
-    if (!packet->full_refresh && source.sync_assembly.count > 0U &&
-      delta.version > source.sync_assembly.version)
-    {
-      // The full refresh will reset the downstream map to its snapshot
-      // version. Retain newer completed deltas so they can be replayed after
-      // that reset without interrupting their normal real-time publication.
-      source.deferred_realtime[delta.version] = delta;
+    if (packet->full_refresh) {
+      if (!source.recovery.rebase(delta)) {
+        reject("full refresh cannot preserve newer realtime state", true);
+        return;
+      }
+    } else {
+      source.recovery.remember(delta);
     }
     publisher_->publish(delta);
     metrics.accepted = true;
@@ -304,7 +330,7 @@ private:
     metrics.end_to_end_latency_ms =
       metrics.sensor_to_receiver_ms + metrics.decode_latency_ms;
     metrics_publisher_->publish(metrics);
-    source.last_version = std::max(source.last_version, packet->version);
+    source.last_version = std::max(source.last_version, delta.version);
     if (!packet->full_refresh &&
       packet->traffic_class == surf_multirobot_msgs::msg::CompressedVoxelDelta::TRAFFIC_REALTIME)
     {
@@ -318,20 +344,20 @@ private:
     if (packet->full_refresh) {
       source.last_full_refresh_version = packet->version;
       source.awaiting_full_refresh = false;
-      for (auto & [version, deferred] : source.deferred_realtime) {
-        if (version > packet->version) {
-          publisher_->publish(deferred);
-        }
-      }
-      source.deferred_realtime.clear();
-      surf_multirobot_msgs::msg::SyncAck ack;
-      ack.header.stamp = now();
-      ack.header.frame_id = packet->header.frame_id;
-      ack.source_id = packet->source_id;
-      ack.map_epoch = packet->map_epoch;
-      ack.version = packet->version;
-      sync_ack_publisher_->publish(ack);
+      source.recovery.complete(packet->version);
+      publish_sync_ack(*packet);
     }
+  }
+
+  void publish_sync_ack(const surf_multirobot_msgs::msg::CompressedVoxelDelta & packet)
+  {
+    surf_multirobot_msgs::msg::SyncAck ack;
+    ack.header.stamp = now();
+    ack.header.frame_id = packet.header.frame_id;
+    ack.source_id = packet.source_id;
+    ack.map_epoch = packet.map_epoch;
+    ack.version = packet.version;
+    sync_ack_publisher_->publish(ack);
   }
 
   std::string robot_name_;
@@ -350,6 +376,7 @@ private:
   double peer_box_padding_{0.20};
   double peer_box_max_age_ms_{150.0};
   std::size_t maximum_uncompressed_bytes_{64U * 1024U * 1024U};
+  std::size_t maximum_realtime_history_bytes_{64U * 1024U * 1024U};
   std::unordered_map<std::string, SourceState> sources_;
   std::chrono::steady_clock::time_point last_sync_request_time_{};
 
@@ -368,6 +395,7 @@ private:
 
 }  // namespace surf_humanoid
 
+#ifndef SURF_NODE_TEST
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
@@ -375,3 +403,5 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
   return 0;
 }
+
+#endif

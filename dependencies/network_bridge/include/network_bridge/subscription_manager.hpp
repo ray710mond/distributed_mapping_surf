@@ -57,7 +57,8 @@ public:
     const rclcpp::Node::SharedPtr & node, const std::string & topic,
     const std::string & subscribe_namespace, int zstd_compression_level = 3,
     bool publish_stale_data = false,
-    std::size_t queue_depth = 0, std::size_t queue_bytes = 0);
+    std::size_t queue_depth = 0, std::size_t queue_bytes = 0,
+    bool latest_snapshot = false);
 
   virtual ~SubscriptionManager();
 
@@ -177,4 +178,9 @@ protected:
   std::size_t queue_bytes_{0};
   std::size_t pending_bytes_{0};
   uint64_t dropped_messages_{0};
+  bool latest_snapshot_{false};
+  bool have_snapshot_{false};
+  std::string snapshot_source_;
+  uint64_t snapshot_epoch_{0};
+  uint64_t snapshot_version_{0};
 };
