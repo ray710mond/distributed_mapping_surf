@@ -126,6 +126,8 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
       rclcpp::Parameter("allocation.dt", .2),
       rclcpp::Parameter("scheduling.delta_hz", 5.),
       rclcpp::Parameter("scheduling.backlog_hz", 5.),
+      rclcpp::Parameter("scheduling.starvation_age_seconds", 0.),
+      rclcpp::Parameter("scheduling.starvation_fraction", .1),
       rclcpp::Parameter("delivery.ack_timeout_seconds", 10.),
       rclcpp::Parameter("capacity.development_bytes_per_second", 10000.)}));
     auto probe = std::make_shared<rclcpp::Node>("large_debt_probe");
@@ -157,6 +159,7 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
     pub->publish(cloud);spin(3.5);
     double shared=0,total=0,active_time=0; std::array<double,2> credits{};
     bool multiple=false; uint64_t peak=0;
+    bool observed_age_metrics=false;
     for(const auto & m:metrics) {
       const double elapsed=std::min(m.actual_dt,2*m.nominal_dt);
       shared=std::min(std::max(1200.,m.usable_capacity*2*m.nominal_dt),shared+m.usable_capacity*elapsed);
@@ -168,10 +171,16 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
         multiple=multiple || m.wire_bytes[i]>1200;
       }
       peak=std::max(peak,m.pending_count[0]+m.pending_count[1]);
+      if (m.selected_count[0]+m.selected_count[1]) {
+        observed_age_metrics = observed_age_metrics ||
+          m.old_pending_selected_count[0]+m.old_pending_selected_count[1] > 0;
+        EXPECT_GE(m.retained_count, m.pending_count[0]+m.pending_count[1]);
+      }
       if(m.pending_count[0]+m.pending_count[1]) active_time+=elapsed;
     }
     EXPECT_GT(peak,53000U);
     EXPECT_TRUE(multiple);
+    EXPECT_TRUE(observed_age_metrics);
     RecordProperty("offered_bytes_per_second", total / active_time);
     RecordProperty("peak_pending_voxels", static_cast<int>(peak));
     EXPECT_GT(total,active_time*10000*.75);

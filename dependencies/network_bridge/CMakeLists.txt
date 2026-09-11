@@ -35,6 +35,7 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   add_launch_test(test/test_chunk_udp.py TIMEOUT 30)
+  add_launch_test(test/test_ack_bridge.py TIMEOUT 30)
   add_launch_test(
     test/test_udp.py
     TIMEOUT 30  # Sets a timeout for the test in seconds

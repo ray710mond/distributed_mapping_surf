@@ -13,6 +13,8 @@
     topics:
     - /humanoid_odometry
     - /realtime_ack
+    /realtime_ack.queue_depth: 256
+    /realtime_ack.queue_bytes: 65536
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport
 /**/halow_control_bridge:
@@ -28,5 +30,7 @@
     - /drone_initialpose
     - /sync_ack
     - /sync_request
+    /sync_ack.queue_depth: 256
+    /sync_ack.queue_bytes: 65536
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport

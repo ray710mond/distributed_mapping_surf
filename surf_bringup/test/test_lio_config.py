@@ -12,6 +12,18 @@ def _parameters(filename):
         return yaml.safe_load(stream)['/**']['ros__parameters']
 
 
+def test_ack_topics_use_bounded_bridge_fifos():
+    with (CONFIG_DIR / 'humanoid_transport.yaml').open(encoding='utf-8') as stream:
+        config = yaml.safe_load(stream)
+    data = config['/**/halow_bridge']['ros__parameters']
+    control = config['/**/halow_control_bridge']['ros__parameters']
+
+    assert data['/realtime_ack.queue_depth'] == 256
+    assert data['/realtime_ack.queue_bytes'] == 65536
+    assert control['/sync_ack.queue_depth'] == 256
+    assert control['/sync_ack.queue_bytes'] == 65536
+
+
 def test_drone_mid360_keeps_calibrated_extrinsic_fixed():
     params = _parameters('drone_mid360.yaml')
 

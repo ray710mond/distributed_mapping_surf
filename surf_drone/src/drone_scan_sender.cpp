@@ -152,6 +152,8 @@ public:
     control_dt_ = declare_parameter<double>("allocation.dt", 0.1);
     schedule_hz_[0] = declare_parameter<double>("scheduling.delta_hz", 10.0);
     schedule_hz_[1] = declare_parameter<double>("scheduling.backlog_hz", 10.0);
+    starvation_fraction_ = declare_parameter<double>("scheduling.starvation_fraction", 0.1);
+    starvation_age_seconds_ = declare_parameter<double>("scheduling.starvation_age_seconds", 30.0);
     for (double rate : schedule_hz_) if (!std::isfinite(rate) || rate <= 0)
       throw std::invalid_argument("scheduling frequencies must be finite and positive");
     defer_seconds_ = declare_parameter<double>("delivery.defer_seconds", 0.1);
@@ -176,7 +178,10 @@ public:
       !std::isfinite(fallback_capacity_) || fallback_capacity_ < 0 ||
       !std::isfinite(realtime_ack_timeout_seconds_) || realtime_ack_timeout_seconds_ <= 0 ||
       !std::isfinite(defer_seconds_) || defer_seconds_ < 0 ||
-      !std::isfinite(capacity_timeout_) || capacity_timeout_ <= 0)
+      !std::isfinite(capacity_timeout_) || capacity_timeout_ <= 0 ||
+      !std::isfinite(starvation_fraction_) || starvation_fraction_ < 0 ||
+      starvation_fraction_ > 1 || !std::isfinite(starvation_age_seconds_) ||
+      starvation_age_seconds_ < 0)
       throw std::invalid_argument("invalid allocator timing/capacity");
     auto model = allocator_.model();
     for (auto item : {std::make_pair("a", &model.a), std::make_pair("b", &model.b),
@@ -826,7 +831,9 @@ private:
         delivery_metric(it->first, it->second, false); it = attempts_.erase(it);
       } else ++it;
     }
+    const double advance_start = steady_seconds();
     debt_.advance(start, defer_seconds_, realtime_ack_timeout_seconds_);
+    const double advance_ms = (steady_seconds() - advance_start) * 1000;
     tf2::Vector3 peer(0, 0, 0);
     bool peer_valid = false;
     {
@@ -841,6 +848,7 @@ private:
     }
     const double priority_start = steady_seconds();
     const auto x = debt_.score(start, weights_, peer, resolution_, peer_valid);
+    const double score_ms = (steady_seconds() - priority_start) * 1000;
     double capacity = fallback_capacity_;
     std::string method = "development_configured";
     if (capacity_received_ > 0) {
@@ -857,7 +865,8 @@ private:
       shared_credit_ + capacity * elapsed);
     surf_multirobot_msgs::msg::AllocationMetrics m;
     m.header.stamp = now(); m.source_id = robot_name_; m.map_epoch = map_epoch_;
-    m.controller_ms = controller_ms; m.priority_ms = (controller_start-priority_start)*1000;
+    m.controller_ms = controller_ms; m.debt_advance_ms = advance_ms;
+    m.debt_score_ms = score_ms; m.priority_ms = score_ms;
     m.step = ++control_sequence_; m.nominal_dt = control_dt_; m.actual_dt = actual_dt;
     m.debt = x; m.previous_debt = previous_debt_; previous_debt_ = x;
     m.usable_capacity = capacity; m.capacity_method = method;
@@ -874,10 +883,17 @@ private:
       m.k[j] = allocator_.gain()(j / 2, j % 2);
     }
     m.stale_pending_discarded = debt_.stale_pending_discarded;
+    m.retained_count = debt_.entries.size();
     const double observation_now = now().seconds();
     bool first_pending = true;
-    for (const auto & [c, e] : debt_.entries) {
-      (void)c; if (e.pending) {++m.pending_count[e.stream];
+    const double metrics_start = steady_seconds();
+    for (const auto & c : debt_.active) {
+      const auto & e = debt_.entries.at(c);
+      {++m.pending_count[e.stream];
+        const double pending_age = std::max(0.0, start - e.created);
+        const int age_bucket = pending_age < 10 ? 0 : pending_age < 30 ? 1 :
+          pending_age < 60 ? 2 : 3;
+        ++m.pending_age_bucket_count[e.stream * 4 + age_bucket];
         m.max_priority_remaining[e.stream] = std::max(m.max_priority_remaining[e.stream], e.priority);
         m.oldest_pending_age = std::max(m.oldest_pending_age, start-e.created);
         const double age = std::max(0.0, observation_now - e.stamp / 1e9);
@@ -891,6 +907,8 @@ private:
         }
         if (e.packet) ++m.inflight_count[e.stream];}
     }
+    m.metrics_scan_ms = (steady_seconds() - metrics_start) * 1000;
+    std::array<double, 2> selected_age_total{};
     for (int stream = 0; stream < 2; ++stream) {
       m.mean_priority_remaining[stream] = m.pending_count[stream] ? x[stream]/m.pending_count[stream] : 0;
       m.requested_rate[stream] = allocation.requested[stream];
@@ -903,8 +921,12 @@ private:
       if (start - last_scheduled_[stream] < 1.0 / schedule_hz_[stream]) continue;
       last_scheduled_[stream] = start;
       const double ordering_start = steady_seconds();
-      auto candidates = debt_.candidates(stream, maximum_packet_bytes_ * 2);
-      m.priority_ms += (steady_seconds()-ordering_start)*1000;
+      const auto reserve = static_cast<std::size_t>(std::ceil(
+        maximum_packet_bytes_ * 0.25 * starvation_fraction_));
+      auto candidates = debt_.candidates(
+        stream, maximum_packet_bytes_ * 2, start, starvation_age_seconds_, reserve);
+      m.selection_ms[stream] = (steady_seconds()-ordering_start)*1000;
+      m.priority_ms += m.selection_ms[stream];
       if (candidates.empty()) continue;
       std::size_t offset = 0;
       // Bound callback work while allowing small packets to consume accrued credit.
@@ -954,6 +976,14 @@ private:
           attempt.coordinates.push_back(candidate->coord);
           m.sent_priority[stream] += candidate->priority;
           m.max_priority_sent[stream] = std::max(m.max_priority_sent[stream], candidate->priority);
+          const double pending_age = std::max(0.0, sent_at - candidate->created);
+          selected_age_total[stream] += pending_age;
+          m.max_selected_pending_age_s[stream] = std::max(
+            m.max_selected_pending_age_s[stream], pending_age);
+          if (pending_age >= starvation_age_seconds_) ++m.old_pending_selected_count[stream];
+          if (candidate->state >= 1 && candidate->state <= 4) {
+            ++m.selected_state_count[stream * 4 + candidate->state - 1];
+          }
         }
         credits_[stream] -= bytes; shared_credit_ -= bytes;
         m.selected_count[stream] += count; m.wire_bytes[stream] += bytes;
@@ -963,6 +993,10 @@ private:
         else if (m.codec[stream] != best.codec) m.codec[stream] = "mixed";
         (stream == 0 ? realtime_publisher_ : backlog_publisher_)->publish(best);
         offset += count;
+      }
+      if (m.selected_count[stream]) {
+        m.mean_selected_pending_age_s[stream] =
+          selected_age_total[stream] / m.selected_count[stream];
       }
     }
     m.computation_ms = (steady_seconds() - start) * 1000;
@@ -1026,6 +1060,7 @@ private:
   double capacity_received_{0}, last_control_time_{0}, matrix_update_time_{0};
   std::array<double, 2> credits_{}, last_scheduled_{};
   std::array<double, 2> schedule_hz_{10,10};
+  double starvation_fraction_{0.1}, starvation_age_seconds_{30};
   std::array<double, 2> previous_debt_{};
   double shared_credit_{0};
   uint64_t packet_version_{0}, last_scan_stamp_{0};

@@ -108,3 +108,34 @@ TEST(InformationDebtPerformance, BoundedSelectionMatchesFullOrderAndIndexedAck)
   EXPECT_FALSE(debt.entries.at(second).pending);
   EXPECT_TRUE(debt.candidates(0, 0).empty());
 }
+
+TEST(Debt, ActiveIndexExcludesResolvedRecoveryHistory)
+{
+  InformationDebt debt;
+  for (int i = 0; i < 10000; ++i) debt.observe({i, 0, 0}, 1, i + 1, 0);
+  for (int i = 0; i < 9000; ++i) {
+    auto & entry = debt.entries.at({i, 0, 0});
+    entry.packet = 1;
+  }
+  std::vector<Coord> acknowledged;
+  for (int i = 0; i < 9000; ++i) acknowledged.push_back({i, 0, 0});
+  debt.ack(1, acknowledged);
+  EXPECT_EQ(debt.entries.size(), 10000U);
+  EXPECT_EQ(debt.active.size(), 1000U);
+  EXPECT_EQ(debt.candidates(0).size(), 1000U);
+  debt.recover(2);
+  EXPECT_EQ(debt.active.size(), debt.entries.size());
+}
+
+TEST(Priority, StarvationReservePrecedesHigherPriorityFreshDebt)
+{
+  InformationDebt debt;
+  const Coord old_low{1, 0, 0};
+  debt.observe(old_low, 1, 1, 0, 1);
+  for (int i = 0; i < 20; ++i) debt.observe({100 + i, 0, 0}, 2, 100 + i, 95, 100);
+  auto selected = debt.candidates(0, 10, 100, 30, 2);
+  ASSERT_EQ(selected.size(), 10U);
+  EXPECT_EQ(selected.front()->coord, old_low);
+  // Without a reserve, normal priority order remains unchanged.
+  EXPECT_FALSE(debt.candidates(0, 10).front()->coord == old_low);
+}

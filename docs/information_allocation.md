@@ -199,12 +199,31 @@ exceed its budget. Uncompressed voxel size never substitutes for wire cost. Both
 queue exists; downstream bridge FIFO may still contain already offered old
 packets, which the receiver safely rejects.
 
+Routine control work iterates an active pending-coordinate index. Resolved
+coordinate history remains available for receiver recovery without increasing
+every score, timeout, metric, and selection pass. Allocation telemetry records
+active counts, total retained records, and advance, score, metric-scan, and
+per-class selection timing. It also records pending age buckets, selected
+pending-age mean/max, old-entry selection counts, and selected occupancy states.
+
+To prevent permanent starvation after the normal priority age term saturates,
+each class reserves a configurable fraction of an estimated packet-sized
+candidate window for entries older than `scheduling.starvation_age_seconds`.
+Reserved entries are oldest-first; all remaining candidates keep priority order.
+Defaults are 10 percent and 30 seconds. The reserve remains subject to the class
+allocation, shared credits, packet limit, temporal checks, and ACK accounting.
+
 The data bridge is UDP on HaLow for both map topics. A second **logical** TCP
 bridge, also addressed over the HaLow subnet, preserves reliable recovery/control
 and initial-pose delivery. It has no map bandwidth budget. The configured usable
 map capacity must exclude that traffic. CDR bytes are offered ROS application
 bytes, not measured on-air bytes: a strict physical airtime limit would require
 pacing/instrumentation at the driver or final bridge boundary.
+
+Both ACK topics use bounded 256-message/65536-byte bridge FIFOs. This matters
+when one controller step emits multiple packets: reliable TCP cannot recover an
+ACK overwritten before the bridge timer consumes it. FIFO overflow rejects the
+newest ACK with a warning instead of silently replacing an older packet ID.
 
 ## Experiment outputs and identification
 

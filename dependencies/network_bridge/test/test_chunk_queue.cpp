@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "rclcpp/serialization.hpp"
 #include "surf_multirobot_msgs/msg/compressed_voxel_delta.hpp"
+#include "surf_multirobot_msgs/msg/realtime_ack.hpp"
+#include "surf_multirobot_msgs/msg/sync_ack.hpp"
 #include "network_bridge/subscription_manager.hpp"
 
 class ChunkQueueTest : public ::testing::Test
@@ -53,6 +55,47 @@ TEST_F(ChunkQueueTest, PreservesEveryChunkAfterSendTimerStall)
   bool valid = true;
   fifo.get_data(valid);
   EXPECT_FALSE(valid);
+}
+
+TEST_F(ChunkQueueTest, PreservesBurstOfActualMapAcknowledgements)
+{
+  SubscriptionManager realtime(node, "/realtime_ack", "", 1, false, 256, 65536);
+  SubscriptionManager backlog(node, "/sync_ack", "", 1, false, 256, 65536);
+  rclcpp::Serialization<surf_multirobot_msgs::msg::RealtimeAck> realtime_serializer;
+  rclcpp::Serialization<surf_multirobot_msgs::msg::SyncAck> backlog_serializer;
+  for (uint64_t version = 1; version <= 32; ++version) {
+    surf_multirobot_msgs::msg::RealtimeAck realtime_ack;
+    realtime_ack.map_epoch = 7; realtime_ack.version = version;
+    auto realtime_wire = std::make_shared<rclcpp::SerializedMessage>();
+    realtime_serializer.serialize_message(&realtime_ack, realtime_wire.get());
+    realtime.callback(realtime_wire);
+
+    surf_multirobot_msgs::msg::SyncAck backlog_ack;
+    backlog_ack.source_id = "drone"; backlog_ack.map_epoch = 7;
+    backlog_ack.version = version;
+    auto backlog_wire = std::make_shared<rclcpp::SerializedMessage>();
+    backlog_serializer.serialize_message(&backlog_ack, backlog_wire.get());
+    backlog.callback(backlog_wire);
+  }
+  for (uint64_t version = 1; version <= 32; ++version) {
+    bool valid = false;
+    auto deserialize = [&](SubscriptionManager & manager, auto & message, auto & serializer) {
+        const auto & bytes = manager.get_data(valid);
+        ASSERT_TRUE(valid);
+        rclcpp::SerializedMessage wire(bytes.size());
+        std::copy(bytes.begin(), bytes.end(), wire.get_rcl_serialized_message().buffer);
+        wire.get_rcl_serialized_message().buffer_length = bytes.size();
+        serializer.deserialize_message(&wire, &message);
+      };
+    surf_multirobot_msgs::msg::RealtimeAck realtime_ack;
+    deserialize(realtime, realtime_ack, realtime_serializer);
+    EXPECT_EQ(realtime_ack.version, version);
+    surf_multirobot_msgs::msg::SyncAck backlog_ack;
+    deserialize(backlog, backlog_ack, backlog_serializer);
+    EXPECT_EQ(backlog_ack.version, version);
+  }
+  EXPECT_FALSE(realtime.has_data());
+  EXPECT_FALSE(backlog.has_data());
 }
 
 TEST_F(ChunkQueueTest, OverflowDoesNotOverwriteAndBudgetIsReclaimed)

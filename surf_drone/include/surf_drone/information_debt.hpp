@@ -2,7 +2,9 @@
 #include "surf_drone/communication_state.hpp"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
+#include <unordered_set>
 
 namespace surf_drone {
 struct PriorityWeights {
@@ -26,6 +28,9 @@ public:
     uint64_t acknowledged_stamp{0};
   };
   std::unordered_map<Coord, Entry, CoordHash> entries;
+  // Scheduling walks only outstanding entries. Resolved entries remain in
+  // entries for recovery without increasing every control-step traversal.
+  std::unordered_set<Coord, CoordHash> active;
   std::array<double, 2> generated{}, acknowledged{}, superseded{}, reclassified{}, disturbance{}, timed_out{}, excluded{};
   uint64_t superseded_count{0}, stale_observations{0}, stale_pending_discarded{0};
   bool observe(Coord c, uint8_t state, uint64_t stamp, double now, double initial_priority = 1.0) {
@@ -42,6 +47,7 @@ public:
       }
     }
     entries[c] = {c, state, stamp, true, 0, 0, now, 0, initial_priority, known_stamp};
+    active.insert(c);
     generated[0] += initial_priority; disturbance[0] += initial_priority; return true;
   }
   void exclude(Coord c) {
@@ -51,13 +57,13 @@ public:
       excluded[it->second.stream] += it->second.priority;
       disturbance[it->second.stream] -= it->second.priority;
     }
-    entries.erase(it);
+    active.erase(c); entries.erase(it);
   }
   void recover(double now) {
     for (auto & [c, e] : entries) {
       (void)c;
       if (!e.pending) {e.pending = true; e.stream = 1; e.created = now;
-        generated[1] += e.priority; disturbance[1] += e.priority;}
+        generated[1] += e.priority; disturbance[1] += e.priority; active.insert(c);}
       if (e.stream == 0) {
         reclassified[0] += e.priority; disturbance[0] -= e.priority;
         disturbance[1] += e.priority; e.stream = 1;
@@ -66,8 +72,8 @@ public:
     }
   }
   void advance(double now, double defer_seconds, double timeout) {
-    for (auto & [c, e] : entries) {
-      (void)c; if (!e.pending) continue;
+    for (const auto & c : active) {
+      auto & e = entries.at(c);
       if (e.packet && now - e.sent >= timeout) {timed_out[e.stream] += e.priority; e.packet = 0;}
       if (!e.packet && e.stream == 0 && now - e.created >= defer_seconds) {
         reclassified[0] += e.priority; disturbance[0] -= e.priority;
@@ -82,6 +88,7 @@ public:
       if (e.pending && e.packet == packet) {
         acknowledged[e.stream] += e.priority; e.pending = false; e.packet = 0;
         e.acknowledged_stamp = e.stamp;
+        active.erase(c);
       }
     }
   }
@@ -94,14 +101,15 @@ public:
       if (e.pending && e.packet == packet) {
         acknowledged[e.stream] += e.priority; e.pending = false; e.packet = 0;
         e.acknowledged_stamp = e.stamp;
+        active.erase(c);
       }
     }
   }
   std::array<double, 2> score(double now, const std::array<PriorityWeights, 2> & weights,
     const tf2::Vector3 & peer, double resolution, bool peer_valid = true) {
     std::array<double, 2> debt{};
-    for (auto & [c, e] : entries) {
-      if (!e.pending) continue;
+    for (const auto & c : active) {
+      auto & e = entries.at(c);
       const tf2::Vector3 position((c.x + .5) * resolution, (c.y + .5) * resolution,
         (c.z + .5) * resolution);
       const double previous = e.priority;
@@ -112,10 +120,15 @@ public:
     }
     return debt;
   }
-  std::vector<Entry *> candidates(int stream, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
+  std::vector<Entry *> candidates(
+    int stream, std::size_t limit = std::numeric_limits<std::size_t>::max(),
+    double now = 0, double starvation_age = std::numeric_limits<double>::infinity(),
+    std::size_t starvation_reserve = 0)
+  {
     std::vector<Entry *> out;
-    for (auto & [c, e] : entries) {
-      (void)c; if (e.pending && !e.packet && e.stream == stream) out.push_back(&e);
+    for (const auto & c : active) {
+      auto & e = entries.at(c);
+      if (!e.packet && e.stream == stream) out.push_back(&e);
     }
     const auto higher_priority = [](const auto * a, const auto * b) {
       if (a->priority != b->priority) return a->priority > b->priority;
@@ -123,12 +136,33 @@ public:
       return std::tie(a->coord.x, a->coord.y, a->coord.z) <
         std::tie(b->coord.x, b->coord.y, b->coord.z);
     };
-    if (out.size() > limit) {
-      std::nth_element(out.begin(), out.begin() + limit, out.end(), higher_priority);
-      out.resize(limit);
+    starvation_reserve = std::min({starvation_reserve, limit, out.size()});
+    std::vector<Entry *> oldest;
+    if (starvation_reserve) {
+      for (auto * e : out) if (now - e->created >= starvation_age) oldest.push_back(e);
+      const auto older = [](const auto * a, const auto * b) {
+          if (a->created != b->created) return a->created < b->created;
+          if (a->stamp != b->stamp) return a->stamp < b->stamp;
+          return std::tie(a->coord.x, a->coord.y, a->coord.z) <
+            std::tie(b->coord.x, b->coord.y, b->coord.z);
+        };
+      if (oldest.size() > starvation_reserve) {
+        std::nth_element(oldest.begin(), oldest.begin() + starvation_reserve, oldest.end(), older);
+        oldest.resize(starvation_reserve);
+      }
+      std::sort(oldest.begin(), oldest.end(), older);
+    }
+    const std::unordered_set<Entry *> reserved(oldest.begin(), oldest.end());
+    out.erase(std::remove_if(out.begin(), out.end(),
+      [&](auto * e) {return reserved.find(e) != reserved.end();}), out.end());
+    const std::size_t priority_limit = limit - oldest.size();
+    if (out.size() > priority_limit) {
+      std::nth_element(out.begin(), out.begin() + priority_limit, out.end(), higher_priority);
+      out.resize(priority_limit);
     }
     std::sort(out.begin(), out.end(), higher_priority);
-    return out;
+    oldest.insert(oldest.end(), out.begin(), out.end());
+    return oldest;
   }
 };
 }  // namespace surf_drone

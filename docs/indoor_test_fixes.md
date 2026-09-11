@@ -47,3 +47,17 @@ A 20-iteration desktop candidate-selection benchmark on 60,000 entries measured 
 Receiver integration checks measured decoding, explicit unavailable end-to-end timing, old voxel stamps versus a recent packet scan header, and empty accepted sets. Radio tests cover sub-second poll jitter, read failures, cache expiry, inherited export age and AP association output. Analysis tests cover per-epoch cumulative totals, signed disturbance and unresolved one-way latency.
 
 A local ROS service smoke test verified initial parameter snapshots, subsequent parameter events and artifact fingerprints in SQLite (`/tmp/surf-config-smoke-m88llb0m`). Python compilation and `git diff --check` passed. Logs are `/tmp/surf-indoor-final-tests.log`, `/tmp/surf-indoor-scheduler-tests.log`, and `/tmp/surf-indoor-bonxai-tests.log`.
+
+## Follow-up after `LQR_indoor_test_2`
+
+The second run achieved 9964 application bytes/s against the configured 10000,
+but exposed 157 BACKLOG ACK timeouts for packets already observed at the receiver.
+Both `/realtime_ack` and `/sync_ack` bridge inputs now use bounded FIFO queues,
+with a real-message burst regression covering 32 consecutive IDs per class.
+
+Routine debt traversal now uses an active pending index; retained resolved state
+is scanned only by explicit recovery. New allocation fields report total retained
+records and advance, scoring, metric-scan, and selection phase time. A default
+10 percent candidate reserve selects entries pending at least 30 seconds oldest
+first, preventing the capped age score from starving the same early coordinates
+forever. See the second run's [full review](../../../../experiments/LQR_indoor_test_2/review.md).

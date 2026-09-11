@@ -11,6 +11,8 @@ float64[2] debt
 float64[2] previous_debt
 uint64[2] pending_count
 uint64[2] inflight_count
+# Includes resolved records retained for recovery.
+uint64 retained_count
 float64[2] generated_debt
 float64[2] acknowledged_debt
 float64[2] superseded_debt
@@ -31,6 +33,13 @@ float64 projection_scale
 float64[2] target_bytes
 uint64[2] selected_count
 float64[2] sent_priority
+# Flat index class*4+bucket/state. Age buckets are <10, 10-30, 30-60, >=60 s;
+# state slots correspond to VoxelDelta states 1..4.
+uint64[8] pending_age_bucket_count
+uint64[8] selected_state_count
+uint64[2] old_pending_selected_count
+float64[2] mean_selected_pending_age_s
+float64[2] max_selected_pending_age_s
 uint64[2] uncompressed_bytes
 uint64[2] compressed_bytes
 # Serialized CDR bytes offered to network_bridge; excludes bridge/IP/radio overhead.
@@ -42,6 +51,10 @@ float64[2] disturbance
 float64[2] timed_out_debt
 
 float64 controller_ms
+float64 debt_advance_ms
+float64 debt_score_ms
+float64 metrics_scan_ms
+float64[2] selection_ms
 float64 priority_ms
 float64 encoding_ms
 float64[2] mean_priority_remaining
