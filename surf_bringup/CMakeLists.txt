@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_temporal_visualizer test/test_temporal_visualizer.py)
   ament_add_pytest_test(test_lio_config test/test_lio_config.py)
   ament_add_pytest_test(test_prepare_map test/test_prepare_map.py)
   ament_add_pytest_test(test_scanlock_handoff test/test_scanlock_handoff.py)

@@ -1,3 +1,4 @@
+# One physical HaLow link. TCP carries reliable recovery/control only.
 /**/halow_bridge:
   ros__parameters:
     network_interface: network_bridge::UdpInterface
@@ -10,22 +11,24 @@
     default_zstd_level: 1
     publish_stale_data: false
     topics:
-      - /realtime_tx
-      - /drone_odometry
+    - /realtime_tx
+    - /drone_odometry
+    - /sync_tx
     subscribe_namespace: /drone/transport
     publish_namespace: /drone/transport
-
-/**/wifi_bridge:
+    /realtime_tx.queue_depth: 256
+    /realtime_tx.queue_bytes: 307200
+    /sync_tx.queue_depth: 256
+    /sync_tx.queue_bytes: 307200
+/**/halow_control_bridge:
   ros__parameters:
     network_interface: network_bridge::TcpInterface
     TcpInterface:
       role: client
-      remote_address: CHANGE_ME_HUMANOID_WIFI_ADDRESS
+      remote_address: CHANGE_ME_HUMANOID_HALOW_ADDRESS
       port: 46001
     default_rate: 100.0
     default_zstd_level: 1
     publish_stale_data: false
-    topics:
-      - /sync_tx
     subscribe_namespace: /drone/transport
     publish_namespace: /drone/transport

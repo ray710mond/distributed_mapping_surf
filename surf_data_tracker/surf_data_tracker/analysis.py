@@ -83,6 +83,42 @@ def derived_measurements(event):
     """Yield normalized measurement rows without conflating unlike units."""
     p = event['payload']
     category, pipeline, stage = event['category'], event['pipeline'], event['stage']
+    if category == 'delivery' and p.get('applied_temporal_regressions', 0) != 0:
+        raise ValueError('Correctness failure: applied temporal regressions must be zero')
+
+    if category in ('allocation', 'capacity'):
+        for metric, value in p.items():
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                continue
+            unit = 'count' if isinstance(value, int) else 'dimensionless'
+            if metric.startswith(('debt_', 'previous_debt_', 'generated_debt_',
+                                  'acknowledged_debt_', 'superseded_debt_', 'reclassified_debt_',
+                                  'disturbance_', 'timed_out_debt_', 'excluded_debt_',
+                                  'sent_priority_', 'mean_priority_', 'max_priority_')):
+                unit = 'priority'
+            elif metric.startswith(('requested_rate_', 'allocated_rate_', 'offered_cdr_rate_')) or metric in (
+                    'usable_capacity', 'usable_capacity_bytes_per_second'):
+                unit = 'bytes/s'
+            elif metric.startswith(('target_bytes_', 'wire_bytes_', 'compressed_bytes_', 'uncompressed_bytes_')):
+                unit = 'bytes'
+            elif metric.endswith('_mbps'):
+                unit = 'Mbps'
+            elif metric.endswith('_dbm'):
+                unit = 'dBm'
+            elif metric.endswith(('_dt', '_age', '_s')) or metric == 'matrix_update_time':
+                unit = 's'
+            elif metric.endswith('_ms'):
+                unit = 'ms'
+            elif metric.startswith('b_'):
+                unit = 'priority/(bytes/s)'
+            elif metric.startswith('k_'):
+                unit = '(bytes/s)/priority'
+            elif metric.startswith('q_'):
+                unit = 'cost/priority^2'
+            elif metric.startswith('r_'):
+                unit = 'cost/(bytes/s)^2'
+            yield category, pipeline, stage, metric, unit, value, 'measured', ''
+        return
     if category == 'pipeline':
         traffic = p.get('traffic_class_name', stage)
         yield category, pipeline, f'{traffic}:conceptual_data_buffer', 'output_bytes', 'bytes', p.get('raw_data_bytes'), 'measured', 'PointCloud2 data buffer; excludes ROS metadata and padding outside data[]'
@@ -144,7 +180,8 @@ def derived_measurements(event):
         for name in ('wire_bytes', 'delivered_payload_bytes', 'voxel_count',
                      'chunk_count', 'received_chunks', 'missing_chunks', 'chunk_loss_pct',
                      'sequence_gap_updates', 'update_loss_pct', 'update_complete',
-                     'jitter_ms', 'decode_ms',
+                     'jitter_ms', 'decode_ms', 'stale_voxels_rejected',
+                     'attempted_temporal_regressions', 'applied_temporal_regressions',
                      'codec_reconstruction_ms', 'receiver_processing_ms'):
             unit = ('bytes' if name.endswith('_bytes') else 'ms' if name.endswith('_ms')
                     else 'pct' if name.endswith('_pct') else 'count')
@@ -233,7 +270,9 @@ def enrich_delivery(events):
     for event in events:
         if event['category'] == 'delivery':
             p = event['payload']
-            streams[(p.get('source_id'), p.get('map_epoch'), p.get('traffic_class'))].append(event)
+            # New packet IDs are global across both logical streams.
+            stream_class = None if p.get('protocol') == 'information' else p.get('traffic_class')
+            streams[(p.get('source_id'), p.get('map_epoch'), stream_class)].append(event)
     for stream in streams.values():
         stream.sort(key=lambda event: (event['payload'].get('version', 0), event['wall_time_ns']))
         updates = defaultdict(list)
@@ -249,10 +288,10 @@ def enrich_delivery(events):
             received = len(received_indexes)
             missing = max(0, expected - received)
             traffic_class = update_events[0]['payload'].get('traffic_class')
-            # Sync snapshots intentionally skip versions. Only the real-time
-            # stream has consecutive-version semantics.
+            # Information packets share consecutive attempt IDs across classes.
+            # Legacy datasets retain their old per-stream interpretation.
             gap = max(0, version - previous_version - 1) if (
-                traffic_class == 1 and previous_version is not None and
+                (update_events[0]['payload'].get('protocol') == 'information' or traffic_class == 1) and previous_version is not None and
                 version is not None) else 0
             incomplete = 1 if missing else 0
             loss_pct = 100.0 * (gap + incomplete) / (gap + 1)

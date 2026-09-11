@@ -111,6 +111,8 @@ class NetworkSampler:
     def _morse_debugfs_stats(interface):
         exported_root = Path('/run/surf-halow-telemetry') / interface
         try:
+            if time.time() - (exported_root / 'mmrc_table_csv').stat().st_mtime > 3.0:
+                raise OSError('stale exported MMRC telemetry')
             table_text = (exported_root / 'mmrc_table_csv').read_text()
             page_text = (exported_root / 'page_stats').read_text()
         except OSError:

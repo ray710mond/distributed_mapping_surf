@@ -1,8 +1,8 @@
+# One physical HaLow link. TCP carries reliable recovery/control only.
 /**/halow_bridge:
   ros__parameters:
     network_interface: network_bridge::UdpInterface
     UdpInterface:
-      # Bind the real-time lane to the humanoid HaLow station, not the AX210.
       local_address: 10.43.30.2
       receive_port: 46000
       remote_address: 10.43.30.1
@@ -11,32 +11,22 @@
     default_zstd_level: 1
     publish_stale_data: false
     topics:
-      # Common-map odometry produced by global_odometry.
-      - /humanoid_odometry
-      # Two uint64 fields, best effort: measurement only, never flow control.
-      - /realtime_ack
+    - /humanoid_odometry
+    - /realtime_ack
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport
-
-/**/wifi_bridge:
+/**/halow_control_bridge:
   ros__parameters:
     network_interface: network_bridge::TcpInterface
     TcpInterface:
-      # network_bridge 3.0.0 listens on all local addresses in server mode.
-      # The drone connects to the laptop's ap0 gateway over the 5-GHz network.
-      # Laptop: 10.42.20.1/24; drone Jetson: 10.42.20.2/24.
       role: server
       port: 46001
     default_rate: 100.0
     default_zstd_level: 1
     publish_stale_data: false
-    # Forward the laptop's one-shot drone initial pose over reliable TCP. The
-    # drone reconstructs it as /drone/transport/drone_initialpose.
     topics:
-      - /drone_initialpose
-      # Acknowledge only fully reconstructed map refreshes.
-      - /sync_ack
-      # Retained recovery request reaches the drone after TCP reconnects.
-      - /sync_request
+    - /drone_initialpose
+    - /sync_ack
+    - /sync_request
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport

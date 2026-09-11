@@ -34,8 +34,6 @@ ament_export_dependencies(rclcpp surf_multirobot_msgs zstd_vendor zstd)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_snapshot_recovery test/test_snapshot_recovery.cpp)
-  target_link_libraries(test_snapshot_recovery ${PROJECT_NAME})
   ament_add_gtest(test_voxel_codec test/test_voxel_codec.cpp)
   if(TARGET test_voxel_codec)
     target_link_libraries(test_voxel_codec ${PROJECT_NAME})

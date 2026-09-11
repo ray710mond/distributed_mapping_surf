@@ -26,9 +26,8 @@ integration:
       self_radius: 0.70
       humanoid_mask:
         enabled: true
-    adaptive:
-      enabled: true
-      manual_mode: -1
+    allocation:
+      dt: 0.1
 
 /**/drone_data_receiver:
   ros__parameters:
@@ -70,3 +69,10 @@ integration:
     network_stats_enabled: true
     # Replace these with real interfaces or use an empty list.
     network_interfaces: []
+
+# Experimental conversion is disabled until a controlled offered-load sweep.
+/**/halow_capacity_provider:
+  ros__parameters:
+    interface: wlx0cbf7400343c
+    experimental_mmrc_factor: 0.0
+    development_bytes_per_second: 10000.0

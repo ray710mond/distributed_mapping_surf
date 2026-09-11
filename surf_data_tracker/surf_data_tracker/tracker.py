@@ -14,7 +14,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from surf_multirobot_msgs.msg import (DeliveryMetrics, PipelineMetrics,
-                                      RealtimeAckMetrics, SyncStatus)
+                                      RealtimeAckMetrics, AllocationMetrics, LinkMetrics)
 
 from .clock import detect_clock_sync
 from .network import NetworkSampler
@@ -83,16 +83,16 @@ class DataTracker(Node):
             'pipeline_topic', '/drone/comm/pipeline_metrics').value
         delivery_topic = self.declare_parameter(
             'delivery_topic', '/humanoid/comm/delivery_metrics').value
-        sync_status_topic = self.declare_parameter(
-            'sync_status_topic', '/drone/comm/sync_status').value
         realtime_ack_metrics_topic = self.declare_parameter(
             'realtime_ack_metrics_topic', '/drone/comm/realtime_ack_metrics').value
         self.create_subscription(PipelineMetrics, pipeline_topic, self._pipeline, 50)
         self.create_subscription(DeliveryMetrics, delivery_topic, self._delivery, 50)
-        self.create_subscription(SyncStatus, sync_status_topic, self._sync_status, 50)
         self.create_subscription(RealtimeAckMetrics, realtime_ack_metrics_topic,
                                  self._realtime_ack, 100)
 
+        self.create_subscription(AllocationMetrics, '/drone/comm/allocation_metrics',
+                                 self._allocation, 100)
+        self.create_subscription(LinkMetrics, '/surf/comm/link_metrics', self._capacity, 20)
         self.pose_subscriptions = []
         for specification in self.declare_parameter(
                 'pose_topics', self._default_pose_topics(self.role)).value:
@@ -161,17 +161,50 @@ class DataTracker(Node):
     @staticmethod
     def _default_interfaces(role):
         if role == 'drone':
-            return ['wlx0cbf7400343c=halow_realtime', 'wlP1p1s0=wifi5_sync']
+            return ['wlx0cbf7400343c=halow']
         if role == 'humanoid':
-            return ['wlx0cbf740035d4=halow_realtime', 'ap0=wifi5_sync']
+            return ['wlx0cbf740035d4=halow']
         return []
 
     def _record(self, *args, **kwargs):
         if self.store.record(*args, **kwargs):
             self.event_count += 1
 
+    def _allocation(self, m):
+        payload = {}
+        for name in m.get_fields_and_field_types():
+            if name == 'header':
+                continue
+            value = getattr(m, name)
+            if isinstance(value, (str, int, float, bool)):
+                payload[name] = value
+            else:
+                for i, item in enumerate(value):
+                    payload[f'{name}_{i}'] = item if isinstance(item, str) else float(item)
+        payload['projected'] = int(any(
+            not math.isfinite(requested) or abs(requested - allocated) > 1e-9
+            for requested, allocated in zip(m.requested_rate, m.allocated_rate)))
+        payload['saturated'] = int(m.projection_scale < 1.0)
+        for i in range(2):
+            payload[f'mean_priority_sent_{i}'] = (
+                m.sent_priority[i] / m.selected_count[i] if m.selected_count[i] else 0.0)
+            payload[f'offered_cdr_rate_{i}'] = m.wire_bytes[i] / m.actual_dt if m.actual_dt > 0 else 0.0
+        self._record('allocation', 'information_debt', 'controller', payload,
+                     wall_time_ns=_stamp_ns(m.header.stamp),
+                     event_id=f'allocation:{m.source_id}:{m.map_epoch}:{m.step}')
+
+    def _capacity(self, m):
+        self._record('capacity', 'radio', m.link_name, {
+            'usable_capacity_bytes_per_second': m.usable_capacity_bytes_per_second,
+            'capacity_method': m.capacity_method,
+            'raw_mmrc_average_mbps': m.raw_mmrc_average_mbps,
+            'experimental_capacity_factor': m.experimental_capacity_factor,
+            'raw_mcs': m.raw_mcs, 'raw_rssi_dbm': m.raw_rssi_dbm,
+            'achieved_interface_mbps': m.measured_throughput_mbps,
+        }, wall_time_ns=_stamp_ns(m.header.stamp))
+
     def _pipeline(self, m):
-        traffic = {1: 'realtime', 2: 'sync'}.get(m.traffic_class, str(m.traffic_class))
+        traffic = {1: 'delta', 2: 'backlog'}.get(m.traffic_class, str(m.traffic_class))
         payload = {
             'traffic_class': m.traffic_class, 'traffic_class_name': traffic,
             'operating_mode': m.operating_mode, 'input_rate_hz': m.input_rate_hz,
@@ -195,18 +228,29 @@ class DataTracker(Node):
             'occupancy_selection_ms': m.occupancy_selection_ms,
             'clearing_ms': m.clearing_ms, 'processing_ms': m.processing_latency_ms,
             'stale_input_drops': m.stale_input_drops}
+        if m.traffic_class == 0:
+            # Input processing is separate from later control-step transmission.
+            # Unpopulated ROS numeric defaults are not measured zero-byte encodings.
+            for key in ('uncompressed_bytes', 'payload_bytes', 'wire_bytes', 'codec',
+                        'selected_voxels', 'packet_count', 'packet_budget_bytes',
+                        'update_budget_bytes', 'compression_ms', 'wire_serialization_ms'):
+                payload.pop(key, None)
+            traffic = 'input'
         self._record('pipeline', 'pointcloud_communication', traffic, payload,
                      wall_time_ns=_stamp_ns(m.transmit_stamp),
                      event_id=f'pipeline:{m.source_id}:{m.map_epoch}:{m.version}:{m.traffic_class}')
 
     def _delivery(self, m):
-        traffic = {1: 'realtime', 2: 'sync'}.get(m.traffic_class, str(m.traffic_class))
-        payload = {'traffic_class': m.traffic_class, 'wire_bytes': m.wire_bytes,
+        traffic = {1: 'delta', 2: 'backlog'}.get(m.traffic_class, str(m.traffic_class))
+        payload = {'protocol': 'information', 'traffic_class': m.traffic_class, 'wire_bytes': m.wire_bytes,
                    'source_id': m.source_id, 'map_epoch': m.map_epoch, 'version': m.version,
                    'voxel_count': m.voxel_count, 'decode_ms': m.decode_latency_ms,
                    'chunk_index': m.chunk_index, 'chunk_count': m.chunk_count,
                    'codec_reconstruction_ms': m.codec_reconstruction_ms,
                    'receiver_processing_ms': m.receiver_processing_ms,
+                   'stale_voxels_rejected': m.stale_voxels_rejected,
+                   'applied_temporal_regressions': m.applied_temporal_regressions,
+                   'attempted_temporal_regressions': m.attempted_temporal_regressions,
                    'accepted': bool(m.accepted), 'rejection_reason': m.rejection_reason,
                    'sender_to_receiver_ms': m.sender_to_receiver_ms,
                    'sensor_to_receiver_ms': m.sensor_to_receiver_ms,
@@ -215,28 +259,6 @@ class DataTracker(Node):
                      wall_time_ns=_stamp_ns(m.header.stamp),
                      event_id=(f'delivery:{m.source_id}:{m.map_epoch}:{m.version}:'
                                f'{m.traffic_class}:{m.chunk_index}'))
-
-    def _sync_status(self, m):
-        states = {
-            0: 'queued', 1: 'retry', 2: 'acknowledged', 3: 'requested',
-            4: 'transmitted'}
-        state = states.get(m.state, str(m.state))
-        stamp_ns = _stamp_ns(m.header.stamp)
-        payload = {
-            'source_id': m.source_id, 'map_epoch': m.map_epoch, 'version': m.version,
-            'state': m.state, 'state_name': state, 'wire_bytes': m.wire_bytes,
-            'packet_count': m.packet_count, 'retry_count': m.retry_count,
-            'encoding_ms': m.encoding_ms,
-            'estimated_transfer_ms': m.estimated_transfer_ms,
-            'transfer_ms': m.transfer_ms,
-            'acknowledgment_ms': m.acknowledgment_ms,
-            'acknowledgment_timeout_ms': m.acknowledgment_timeout_ms,
-            'next_refresh_interval_s': m.next_refresh_interval_s,
-            'reason': m.reason}
-        self._record('sync', 'pointcloud_communication', state, payload,
-                     wall_time_ns=stamp_ns,
-                     event_id=(f'sync:{m.source_id}:{m.map_epoch}:{m.version}:'
-                               f'{m.state}:{m.retry_count}:{stamp_ns}'))
 
     def _realtime_ack(self, m):
         payload = {
@@ -252,7 +274,7 @@ class DataTracker(Node):
         }
         state = 'acknowledged' if m.acknowledged else 'timeout'
         self._record('latency', 'pointcloud_communication',
-                     f'halow_realtime:{state}', payload,
+                     f'halow:{"delta" if m.traffic_class == 1 else "backlog"}:{state}', payload,
                      wall_time_ns=_stamp_ns(m.header.stamp),
                      event_id=(f'realtime_ack:{m.map_epoch}:{m.version}:{state}'))
 

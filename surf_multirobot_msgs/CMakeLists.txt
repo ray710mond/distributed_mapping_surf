@@ -11,6 +11,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CompressedVoxelDelta.msg"
   "msg/DeliveryMetrics.msg"
   "msg/LinkMetrics.msg"
+  "msg/AllocationMetrics.msg"
   "msg/PipelineMetrics.msg"
   "msg/RealtimeAck.msg"
   "msg/RealtimeAckMetrics.msg"

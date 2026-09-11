@@ -1,3 +1,4 @@
+# One physical HaLow link. TCP carries reliable recovery/control only.
 /**/halow_bridge:
   ros__parameters:
     network_interface: network_bridge::UdpInterface
@@ -10,12 +11,11 @@
     default_zstd_level: 1
     publish_stale_data: false
     topics:
-      - /humanoid_odometry
-      - /realtime_ack
+    - /humanoid_odometry
+    - /realtime_ack
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport
-
-/**/wifi_bridge:
+/**/halow_control_bridge:
   ros__parameters:
     network_interface: network_bridge::TcpInterface
     TcpInterface:
@@ -25,8 +25,8 @@
     default_zstd_level: 1
     publish_stale_data: false
     topics:
-      - /drone_initialpose
-      - /sync_ack
-      - /sync_request
+    - /drone_initialpose
+    - /sync_ack
+    - /sync_request
     subscribe_namespace: /humanoid/transport
     publish_namespace: /humanoid/transport

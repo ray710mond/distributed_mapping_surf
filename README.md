@@ -8,6 +8,10 @@ radio/network provisioning, clock verification, and telemetry. It does not
 start or configure a robot's lidar, localization, locomotion, flight control,
 or general perception stack.
 
+Map communication uses a continuous DELTA/BACKLOG LQR allocator over one HaLow
+radio. See [architecture and experiment guide](docs/information_allocation.md)
+for lifecycle, temporal correctness, tuning, capacity calibration and validation.
+
 ## Current compatibility
 
 The copied source is the existing ROS 2 Jazzy source, without Humble-specific

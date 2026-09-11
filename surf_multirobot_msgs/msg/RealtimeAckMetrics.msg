@@ -8,3 +8,6 @@ float32 update_completion_rtt_ms
 # Final map chunk sent through receipt of the ACK.
 float32 final_chunk_rtt_ms
 float32 timeout_ms
+
+# 1 DELTA, 2 BACKLOG (legacy type name retained).
+uint8 traffic_class

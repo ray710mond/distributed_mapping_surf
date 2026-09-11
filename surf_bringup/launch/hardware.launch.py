@@ -440,6 +440,18 @@ def _nodes(context):
             }],
         ),
         Node(
+            package='surf_data_tracker', executable='halow_capacity_provider',
+            name='halow_capacity_provider', output='screen',
+            parameters=[{'interface': LaunchConfiguration('capacity_interface').perform(context) or
+                         ('wlx0cbf7400343c' if role == 'drone' else 'wlx0cbf740035d4'),
+                         'experimental_mmrc_factor': ParameterValue(LaunchConfiguration('capacity_mmrc_factor'), value_type=float),
+                         'development_bytes_per_second': ParameterValue(LaunchConfiguration('capacity_development_bps'), value_type=float)}],
+        ),
+        Node(
+            package='network_bridge', executable='network_bridge', namespace=role,
+            name='halow_control_bridge', output='screen', parameters=[transport_file],
+        ),
+        Node(
             package='network_bridge',
             executable='network_bridge',
             namespace=role,
@@ -447,14 +459,7 @@ def _nodes(context):
             output='screen',
             parameters=[transport_file],
         ),
-        Node(
-            package='network_bridge',
-            executable='network_bridge',
-            namespace=role,
-            name='wifi_bridge',
-            output='screen',
-            parameters=[transport_file],
-        ),
+
     ])
 
     if _boolean_launch_argument(context, 'clock_guard_enabled'):
@@ -640,6 +645,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'tracker_notes', default_value='',
             description='Optional experiment notes stored verbatim.'),
+        DeclareLaunchArgument('capacity_interface', default_value=''),
+        DeclareLaunchArgument('capacity_mmrc_factor', default_value='0.0'),
+        DeclareLaunchArgument('capacity_development_bps', default_value='10000.0'),
         DeclareLaunchArgument(
             'tracker_clock_sync_method', default_value='unverified',
             description='Verified clock synchronization method, or unverified.'),

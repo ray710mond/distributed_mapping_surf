@@ -2,6 +2,7 @@
 """Publish the active SLAM mapper's occupancy in the laptop RViz frame."""
 
 import copy
+import math
 import struct
 
 import rclpy
@@ -33,6 +34,8 @@ class SlamMapVisualizer(Node):
         self.voxels = {}
         self.map_epoch = None
         self.version = 0
+        self.observation_times = {}
+        self.retired_epochs = set()
 
         if source_type == 'pointcloud':
             self.subscription = self.create_subscription(
@@ -55,26 +58,43 @@ class SlamMapVisualizer(Node):
         self.publisher.publish(output)
 
     def _delta_callback(self, message):
+        information = message.operating_mode == 4
+        resolution = float(message.resolution)
+        if not math.isfinite(resolution) or resolution <= 0:
+            return
+        count = len(message.x)
+        if any(len(v) != count for v in (message.y, message.z, message.state,
+                                         message.observation_time_ns)):
+            return
+        if message.map_epoch in self.retired_epochs:
+            return
         if self.map_epoch != message.map_epoch:
+            if self.map_epoch is not None:
+                self.retired_epochs.add(self.map_epoch)
             self.voxels.clear()
+            self.observation_times.clear()
             self.map_epoch = message.map_epoch
             self.version = 0
-        if message.version < self.version or (
-                message.version == self.version and not message.full_refresh):
+        if not information and (message.version < self.version or (
+                message.version == self.version and not message.full_refresh)):
             return
-        if message.full_refresh:
+        if not information and message.full_refresh:
             self.voxels.clear()
+            self.observation_times.clear()
 
-        resolution = float(message.resolution)
-        for x, y, z, state in zip(message.x, message.y, message.z, message.state):
+        for x, y, z, state, stamp in zip(message.x, message.y, message.z,
+                                          message.state, message.observation_time_ns):
             key = (x, y, z)
+            if key in self.observation_times and stamp <= self.observation_times[key]:
+                continue
+            self.observation_times[key] = stamp  # Retain deletion timestamps too.
             if state in (
                     VoxelDelta.STATE_OCCUPIED_STATIC,
                     VoxelDelta.STATE_OCCUPIED_DYNAMIC):
                 self.voxels[key] = resolution
             elif state in (VoxelDelta.STATE_FREE, VoxelDelta.STATE_DELETE):
                 self.voxels.pop(key, None)
-        self.version = message.version
+        self.version = max(self.version, message.version)
         self._publish_voxels(message.header.stamp)
 
     def _publish_voxels(self, stamp):

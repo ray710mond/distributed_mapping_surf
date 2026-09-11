@@ -10,7 +10,7 @@ services:
     stop_grace_period: 30s
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID}
-      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-SUBNET}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-LOCALHOST}
     volumes:
       - ${SURF_ROBOT_CONFIG:?Set SURF_ROBOT_CONFIG}:/config/robot.yaml:ro
       - ${SURF_TRANSPORT_CONFIG:?Set SURF_TRANSPORT_CONFIG}:/config/transport.yaml:ro

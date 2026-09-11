@@ -19,3 +19,8 @@ float32 receiver_processing_ms
 float32 end_to_end_latency_ms
 bool accepted
 string rejection_reason
+
+uint64 stale_voxels_rejected
+uint64 applied_temporal_regressions
+
+uint64 attempted_temporal_regressions

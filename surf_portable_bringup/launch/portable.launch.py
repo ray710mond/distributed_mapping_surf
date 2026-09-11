@@ -128,7 +128,13 @@ def _setup(context):
         ))
 
     if _as_bool(context, 'enable_transport'):
-        for bridge_name in ('halow_bridge', 'wifi_bridge'):
+        if role == 'drone':
+            actions.append(Node(
+                package='surf_data_tracker', executable='halow_capacity_provider',
+                name='halow_capacity_provider', output='screen',
+                parameters=[_node_parameters(document, 'halow_capacity_provider')],
+            ))
+        for bridge_name in ('halow_bridge', 'halow_control_bridge'):
             actions.append(Node(
                 package='network_bridge', executable='network_bridge',
                 namespace=namespace, name=bridge_name, output='screen',

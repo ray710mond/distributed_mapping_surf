@@ -43,7 +43,10 @@ class NetworkSamplerTest(unittest.TestCase):
         values = {
             '/run/surf-halow-telemetry/morse0/mmrc_table_csv': table,
             '/run/surf-halow-telemetry/morse0/page_stats': 'Data Tx: 50\nQueue stop: 2\n'}
-        with patch('pathlib.Path.read_text', lambda path: values[str(path)]):
+        with patch('pathlib.Path.read_text', lambda path: values[str(path)]), \
+                patch('pathlib.Path.stat') as stat:
+            import time
+            stat.return_value.st_mtime = time.time()
             result = NetworkSampler._morse_debugfs_stats('morse0')
         self.assertEqual(result['s1g_mcs'], 9)
         self.assertEqual(result['s1g_bandwidth_mhz'], 4)

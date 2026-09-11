@@ -8,7 +8,7 @@ The portable launch starts only:
 - the drone sender or humanoid receiver;
 - an odometry normalizer that republishes the configured robot-owned odometry
   under the existing SURF transport contract;
-- the HaLow and 5 GHz `network_bridge` instances when `enable_transport` is
+- the HaLow data and HaLow control `network_bridge` instances when `enable_transport` is
   true.
 - the data tracker when `enable_tracker` is true.
 

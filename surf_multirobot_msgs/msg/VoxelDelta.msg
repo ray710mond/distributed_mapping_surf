@@ -1,8 +1,11 @@
 # Uncompressed, versioned changes to a sparse voxel map.
+# Deprecated legacy snapshot/adaptive constants; retained for old wire readers.
 uint8 MODE_FULL=0
 uint8 MODE_VOXEL_DELTAS=1
 uint8 MODE_DYNAMIC_ONLY=2
 uint8 MODE_METADATA_ONLY=3
+# Incremental DELTA/BACKLOG protocol with independent per-voxel temporal validation.
+uint8 MODE_INFORMATION=4
 
 uint8 STATE_OCCUPIED_STATIC=1
 uint8 STATE_OCCUPIED_DYNAMIC=2
@@ -15,6 +18,7 @@ uint64 map_epoch
 uint64 version
 uint64 base_version
 uint8 operating_mode
+# Compatibility field; normal information packets always set false.
 bool full_refresh
 # Zero-based chunk metadata. A value of 0/1 is an unchunked update.
 uint32 chunk_index

@@ -1,6 +1,7 @@
 # Wire representation. The payload contains deterministic binary VoxelDelta
 # records and is compressed when doing so reduces the payload size.
 uint8 TRAFFIC_CONTROL=0
+# Compatibility names: 1 is DELTA, 2 is BACKLOG on the same physical link.
 uint8 TRAFFIC_REALTIME=1
 uint8 TRAFFIC_SYNC=2
 
@@ -14,6 +15,7 @@ uint64 version
 uint64 base_version
 uint8 operating_mode
 uint8 traffic_class
+# Compatibility field; normal information packets always set false.
 bool full_refresh
 # Zero-based independently serialized chunk within this logical version.
 uint32 chunk_index

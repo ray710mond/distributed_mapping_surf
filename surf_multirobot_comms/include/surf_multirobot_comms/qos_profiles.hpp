@@ -14,10 +14,9 @@ inline rclcpp::QoS realtime_qos()
 
 inline rclcpp::QoS sync_qos()
 {
-  // Keep the latest full refresh available across bridge reconnects and node
-  // startup ordering. A volatile receiver can see only refreshes published
-  // after it subscribes, leaving it stuck while real-time deltas are ignored.
-  return rclcpp::QoS(rclcpp::KeepLast(256)).reliable().transient_local();
+  // Compatibility name: BACKLOG uses application ACK/reselection. Volatile durability
+  // prevents unbudgeted replay of obsolete DDS history after bridge reconnects.
+  return rclcpp::QoS(rclcpp::KeepLast(256)).reliable().durability_volatile();
 }
 
 }  // namespace surf::comms

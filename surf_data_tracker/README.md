@@ -19,14 +19,13 @@ experiments/<run_id>/
 
 | Host | Measurements |
 |---|---|
-| Drone Jetson | sender sizes/counts; filter, voxel, delta, representation and compression effects; queue/stage compute times; drone map clouds; common-frame poses; both radios |
+| Drone Jetson | sender sizes/counts; filter, voxel, delta, representation and compression effects; queue/stage compute times; drone map clouds; common-frame poses; the HaLow radio |
 | Humanoid laptop | reception/decode/reconstruction; accepted traffic; humanoid map clouds; common-frame poses; robot radios; local analysis and visualization |
 
 The real pose sources are `/drone/transport/{drone,humanoid}_odometry` and `/humanoid/transport/{drone,humanoid}_odometry`. Distance is calculated only when both samples have the same `frame_id` and are within the configured maximum age (500 ms offline default). The output retains 3D/planar separation, both XYZ positions, and each sample age. Stale poses and frame mismatches are labeled, never subtracted.
 
 Wireless sampling defaults to 2 Hz. The repository-configured devices are
-`wlx0cbf7400343c`/`wlx0cbf740035d4` for HaLow, `wlP1p1s0` for the Jetson's
-5-GHz AX210 client, and `ap0` for the laptop's 5-GHz access point.
+`wlx0cbf7400343c`/`wlx0cbf740035d4` for the shared HaLow link.
 `/sys/class/net` supplies byte/packet/error/drop counters. `iw` supplies RSSI,
 expected throughput, retries, failures, beacon loss, and RX miscellaneous drops.
 For Morse radios, the apparent VHT channel width and bitrate are Linux S1G
@@ -194,4 +193,7 @@ Real-time HaLow updates additionally use a minimal best-effort return ACK after
 the receiver reconstructs all chunks. The sender records clock-independent full
 update completion RTT, final-chunk RTT, ACK timeouts, and `final-chunk RTT / 2`
 as an explicitly symmetric-path one-way estimate.
-ACKs contain only the map epoch and version and never block or retry updates.
+ACKs resolve matching packet debt; timeout leaves information pending for BACKLOG reselection.
+
+Controller-step logging, runtime matrix revisions, capacity calibration and the
+`identify_allocation` utility are documented in the [allocation guide](../docs/information_allocation.md).
