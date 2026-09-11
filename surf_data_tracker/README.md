@@ -97,7 +97,8 @@ For defensible one-way latency, both hosts must record verified clock evidence.
 The laptop tracker queries local Chrony automatically at startup. On the
 Jetson, `surf-jetson-test-mode` writes a fresh verification snapshot under
 `/run/surf-clock-sync`; Compose mounts that snapshot into the tracker container.
-Run test mode no more than five minutes before launching the experiment.
+The host clock exporter refreshes internet/HaLow clock proof every ten seconds.
+The test-mode commands check readiness without switching Wi-Fi.
 Explicit `tracker_clock_sync_method`, `tracker_clock_offset_ms`, and
 `tracker_clock_uncertainty_ms` arguments override detection. If either host is
 unverified, cross-host latency rows are omitted; same-process monotonic compute

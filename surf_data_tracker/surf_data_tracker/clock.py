@@ -2,6 +2,7 @@
 """Conservative Chrony verification for cross-host timestamp metadata."""
 
 import csv
+import ipaddress
 import json
 import math
 import subprocess
@@ -40,13 +41,17 @@ def _validated_status(document, now_ns=None):
     }
 
 
-def _chrony_csv_status(text, now_ns=None):
+def clock_document(text, now_ns=None, peer=None):
     try:
         row = next(csv.reader([text.strip()]))
         # chronyc -c tracking: ref, stratum, ref-time, system-time,
         # last-offset, RMS-offset, frequency, residual, skew, root-delay,
         # root-dispersion, update-interval, leap-status.
         if len(row) < 13 or row[-1].strip().lower() != 'normal':
+            return None
+        reference = row[0].strip().upper()
+        stratum = int(row[-12])
+        if reference in ('00000000', '7F7F0101') or not 1 <= stratum < 16:
             return None
         system_time = float(row[-10])
         rms_offset = float(row[-8])
@@ -59,14 +64,23 @@ def _chrony_csv_status(text, now_ns=None):
                       + abs(root_dispersion)) * 1000.0
     document = {
         'verified': True,
-        'method': 'chrony-local',
+        'method': ('chrony-halow-client' if peer and reference ==
+                   f'{int(ipaddress.IPv4Address(peer)):08X}' else
+                   'chrony-internet' if peer else 'chrony-local'),
         'offset_ms': system_time * 1000.0,
         'uncertainty_ms': uncertainty_ms,
         'measured_at_unix_ns': time.time_ns() if now_ns is None else now_ns,
         'measured_at_utc': datetime.now(timezone.utc).isoformat(),
         'source': (row[1] if len(row) > 13 else row[0]).strip(),
     }
-    return _validated_status(document, now_ns=document['measured_at_unix_ns'])
+    if _validated_status(document, now_ns=document['measured_at_unix_ns']) is None:
+        return None
+    return document
+
+
+def _chrony_csv_status(text, now_ns=None):
+    document = clock_document(text, now_ns=now_ns)
+    return _validated_status(document, now_ns=now_ns) if document else None
 
 
 def detect_clock_sync(status_path=DEFAULT_STATUS_PATH, now_ns=None):
@@ -76,6 +90,9 @@ def detect_clock_sync(status_path=DEFAULT_STATUS_PATH, now_ns=None):
     except (OSError, json.JSONDecodeError):
         document = None
     if document is not None:
+        # A fresh explicit failure supersedes older proof, including in containers.
+        if not document.get("verified"):
+            return None
         status = _validated_status(document, now_ns=now_ns)
         if status:
             return status

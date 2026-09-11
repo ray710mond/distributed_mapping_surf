@@ -21,12 +21,6 @@ fi
 
 echo "Switching to normal Wi-Fi mode..."
 
-systemctl stop surf-robot-hotspot.service 2>/dev/null || true
-
-# systemd does not run ExecStop for an already-inactive unit. Invoke the same
-# helper once more so remnants from an interrupted or older run are removed.
-/usr/local/sbin/stop-surf-hotspot >/dev/null
-
 # Defensive recovery in case an earlier version of the scripts marked
 # the physical Wi-Fi interface unmanaged.
 nmcli device set "$RADIO_IF" managed yes

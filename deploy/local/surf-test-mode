@@ -1,47 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 CONFIG_FILE=${SURF_LOCAL_CONFIG:-/etc/surf/local.env}
-
-if [[ ! -r "$CONFIG_FILE" ]]; then
-    echo "Local deployment configuration is not readable: $CONFIG_FILE" >&2
-    exit 1
-fi
-
-# shellcheck disable=SC1090
 source "$CONFIG_FILE"
-
-RADIO_IF=${SURF_UPLINK_IF:?SURF_UPLINK_IF is required}
-AP_ADDR=${SURF_WIFI5_AP_ADDR:?SURF_WIFI5_AP_ADDR is required}
-PEER_ADDR=${SURF_WIFI5_PEER_ADDR:?SURF_WIFI5_PEER_ADDR is required}
-
-if [[ ${EUID} -ne 0 ]]; then
-    echo "Run with sudo: sudo surf-test-mode" >&2
+PEER=${SURF_HALOW_PEER:?HaLow peer is required}
+INTERFACE=${SURF_HALOW_IF:?HaLow interface is required}
+route=$(ip route get "$PEER")
+if [[ $route != *" dev $INTERFACE "* ]]; then
+    echo "Peer $PEER is not routed over $INTERFACE." >&2
     exit 1
 fi
-
-echo "Switching to SURF testing mode..."
-
-# Ensure the physical Intel interface remains owned by NetworkManager.  Leave
-# the current connection up for now: start-surf-hotspot performs a regulatory
-# scan before it disconnects the station and creates the AP.
-nmcli device set "$RADIO_IF" managed yes
-
-# Restart so a stale AP from an earlier attempt cannot survive.
-systemctl stop surf-robot-hotspot.service 2>/dev/null || true
-if ! systemctl start surf-robot-hotspot.service; then
-    echo >&2
-    echo "Hotspot startup details:" >&2
-    journalctl -u surf-robot-hotspot.service -n 25 --no-pager >&2 || true
-    exit 1
-fi
-
-echo
-echo "SURF testing mode active."
-echo "Laptop management IP: $AP_ADDR"
-echo "Expected peer IP:      $PEER_ADDR"
-echo
-echo "Internet access through this Wi-Fi radio is intentionally disabled."
-echo
-echo "Test the Jetson with:"
-echo "  ping $PEER_ADDR"
+# Do not switch Wi-Fi or step the clock: this is safe during an existing run.
+chronyc waitsync 30 0.01 0 1
+clock-sync-status
+echo "HaLow peer route and clock ready; internet Wi-Fi remains connected."

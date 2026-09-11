@@ -1,5 +1,5 @@
 [Unit]
-Description=Continuously export verified SURF offline clock status
+Description=Continuously export SURF internet/HaLow clock status
 After=chrony.service network-online.target
 Wants=chrony.service
 

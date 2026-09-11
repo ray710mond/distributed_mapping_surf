@@ -20,10 +20,8 @@ source "$config_file"
 required_settings=(
     SURF_JETSON_WIFI_IF
     SURF_JETSON_INTERNET_PROFILE
-    SURF_JETSON_TEST_PROFILE
     SURF_JETSON_HALOW_IF
     SURF_JETSON_HALOW_PEER
-    SURF_JETSON_TEST_ADDR
     SURF_TELEMETRY_USER
 )
 
@@ -44,24 +42,15 @@ done
 nmcli device show "$SURF_JETSON_WIFI_IF" >/dev/null
 nmcli device show "$SURF_JETSON_HALOW_IF" >/dev/null
 nmcli connection show "$SURF_JETSON_INTERNET_PROFILE" >/dev/null
-nmcli connection show "$SURF_JETSON_TEST_PROFILE" >/dev/null
-
-# The robot profile is local-only and remains the default after reboot. Campus
-# Internet is entered explicitly and must not displace the robot link later.
 nmcli connection modify "$SURF_JETSON_INTERNET_PROFILE" \
-    connection.autoconnect no
-nmcli connection modify "$SURF_JETSON_TEST_PROFILE" \
-    connection.autoconnect yes \
-    connection.autoconnect-priority 100 \
-    802-11-wireless.powersave 2 \
-    ipv4.never-default yes \
-    ipv4.gateway "" \
-    ipv6.never-default yes
-nmcli connection modify "$SURF_JETSON_INTERNET_PROFILE" \
+    connection.autoconnect yes connection.autoconnect-priority 100 \
     802-11-wireless.powersave 2
 
 install -d -m 0755 /etc/surf
-install -m 0600 "$config_file" /etc/surf/jetson-network.env
+if [[ $(readlink -f "$config_file") != /etc/surf/jetson-network.env ]]; then
+    install -m 0600 "$config_file" /etc/surf/jetson-network.env
+fi
+"$project_dir/../network/remove-surf-wifi-peer-config.sh"
 install -m 0755 "$project_dir/surf-jetson-internet-mode" /usr/local/sbin/
 install -m 0755 "$project_dir/surf-jetson-test-mode" /usr/local/sbin/
 install -m 0755 \
@@ -69,25 +58,13 @@ install -m 0755 \
     /usr/local/bin/clock-sync-status
 install -m 0755 "$project_dir/../network/surf-preflight" /usr/local/bin/surf-preflight
 
-# Persist the laptop as the preferred offline source across Chrony and host
-# reboots. Internet sources may coexist but cannot replace this preferred peer
-# while the field link is reachable.
-install -d -m 0755 /etc/chrony/conf.d
-printf 'server %s iburst prefer minpoll 2 maxpoll 4\n' "$SURF_JETSON_HALOW_PEER" \
-    > /etc/chrony/conf.d/surf-halow-client.conf
-
-install -m 0755 "$project_dir/../clock-sync/surf-clock-sync-exporter" /usr/local/sbin/
-install -m 0644 "$project_dir/../clock-sync/surf-clock-sync-exporter.service" \
-    /etc/systemd/system/
-printf 'SURF_CLOCK_PEER=%q\n' "$SURF_JETSON_HALOW_PEER" > /etc/surf/clock-sync.env
+"$project_dir/../clock-sync/install-surf-clock-sync.sh" "$SURF_JETSON_HALOW_PEER"
 
 "$project_dir/../network/install-surf-radio-policy.sh" \
     "$SURF_JETSON_WIFI_IF" "$SURF_JETSON_HALOW_IF"
 "$project_dir/../halow-telemetry/install-surf-halow-telemetry.sh" \
     "$SURF_TELEMETRY_USER" "$SURF_JETSON_HALOW_IF"
-systemctl restart chrony.service
-systemctl daemon-reload
-systemctl enable --now surf-clock-sync-exporter.service
+/usr/local/sbin/surf-jetson-internet-mode
 
 echo "Jetson headless network commands installed:"
 echo "  sudo surf-jetson-internet-mode"
