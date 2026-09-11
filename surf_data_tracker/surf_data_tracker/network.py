@@ -27,6 +27,7 @@ class NetworkSampler:
         self.previous = {}
         self.morse_interval_ns = int(1e9 / max(0.1, morse_stats_rate_hz))
         self.morse_last_sample_ns = {}
+        self.morse_cache = {}
         self.morse_cli = morse_cli or shutil.which('morse_cli') or shutil.which('morsectrl')
 
     @staticmethod
@@ -50,7 +51,7 @@ class NetworkSampler:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 values[name] = float(match.group(1))
-        values['interface_state'] = 'connected' if 'Connected to ' in text else 'unavailable'
+        values['association_state'] = 'connected' if 'Connected to ' in text else 'not_reported'
         try:
             station = subprocess.run(
                 ['iw', 'dev', interface, 'station', 'dump'], capture_output=True,
@@ -81,9 +82,27 @@ class NetworkSampler:
 
     def _morse_stats(self, interface, now_ns):
         previous = self.morse_last_sample_ns.get(interface)
-        if previous is not None and now_ns - previous < self.morse_interval_ns:
-            return {}
-        self.morse_last_sample_ns[interface] = now_ns
+        poll = previous is None or now_ns - previous >= self.morse_interval_ns
+        status = 'poll_suppressed'
+        if poll:
+            self.morse_last_sample_ns[interface] = now_ns
+            fresh = self._read_morse_stats(interface)
+            status = fresh.get('morse_stats_state', 'unavailable')
+            if status in ('debugfs_available', 'available'):
+                age = fresh.get('morse_measurement_age_s', 0.0)
+                self.morse_cache[interface] = (now_ns - int(age * 1e9), fresh)
+        cached = self.morse_cache.get(interface)
+        if cached:
+            measured, values = cached
+            age = max(0.0, (now_ns - measured) / 1e9)
+            if age <= 3.0:
+                return {**values, 'morse_measurement_age_s': age,
+                        'morse_sample_valid': True, 'morse_poll_state': status}
+            self.morse_cache.pop(interface, None)
+        return {'morse_stats_state': 'unavailable', 'morse_sample_valid': False,
+                'morse_poll_state': status}
+
+    def _read_morse_stats(self, interface):
         debugfs = self._morse_debugfs_stats(interface)
         if debugfs:
             return debugfs
@@ -110,8 +129,10 @@ class NetworkSampler:
     @staticmethod
     def _morse_debugfs_stats(interface):
         exported_root = Path('/run/surf-halow-telemetry') / interface
+        measurement_age = 0.0
         try:
-            if time.time() - (exported_root / 'mmrc_table_csv').stat().st_mtime > 3.0:
+            measurement_age = max(0.0, time.time() - (exported_root / 'mmrc_table_csv').stat().st_mtime)
+            if measurement_age > 3.0:
                 raise OSError('stale exported MMRC telemetry')
             table_text = (exported_root / 'mmrc_table_csv').read_text()
             page_text = (exported_root / 'page_stats').read_text()
@@ -122,10 +143,12 @@ class NetworkSampler:
                 root = Path('/sys/kernel/debug/ieee80211') / phy / 'morse'
                 table_text = (root / 'mmrc_table_csv').read_text()
                 page_text = (root / 'page_stats').read_text()
+                measurement_age = 0.0
             except OSError:
                 return {}
         rows = list(csv.DictReader(io.StringIO(table_text)))
-        output = {'morse_stats_state': 'debugfs_available'}
+        output = {'morse_stats_state': 'debugfs_available',
+                  'morse_measurement_age_s': measurement_age}
         numeric_columns = ('total_success', 'total_attempts', 'mpdu_success', 'mpdu_failures')
         for column in numeric_columns:
             output[f'morse_mmrc_{column}'] = sum(
@@ -220,6 +243,9 @@ class NetworkSampler:
                 invalid_rssi = True
         if invalid_rssi:
             values['rssi_state'] = 'saturated_or_invalid'
+        if ('rssi_dbm' in values and 'rssi_avg_dbm' in values and
+                abs(values['rssi_dbm'] - values['rssi_avg_dbm']) > 40):
+            values['rssi_state'] = 'inconsistent_instantaneous_and_average'
         for direction in ('tx', 'rx'):
             rate = values.pop(f'{direction}_bitrate_mbps', None)
             if rate is not None:

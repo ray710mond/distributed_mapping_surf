@@ -1,6 +1,7 @@
 """Distributed, host-local ROS instrumentation node."""
 
 import math
+import hashlib
 import os
 import socket
 import subprocess
@@ -12,6 +13,9 @@ import rclpy
 from ament_index_python.packages import get_package_prefix
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.parameter import parameter_value_to_python
+from rclpy.parameter_client import AsyncParameterClient
+from rcl_interfaces.msg import ParameterEvent
 from sensor_msgs.msg import PointCloud2
 from surf_multirobot_msgs.msg import (DeliveryMetrics, PipelineMetrics,
                                       RealtimeAckMetrics, AllocationMetrics, LinkMetrics)
@@ -60,6 +64,9 @@ class DataTracker(Node):
             'preferred_timeseries_window_s': float(
                 self.declare_parameter('timeseries_window_s', 1.0).value),
             'git_revision': _git_revision(), 'pid': os.getpid(),
+            'runtime_artifacts': self._runtime_artifacts(),
+            'image_reference': os.environ.get('SURF_IMAGE_REFERENCE', 'unavailable'),
+            'image_digest': os.environ.get('SURF_IMAGE_DIGEST', 'unavailable'),
         }
         if clock_method in ('', 'unverified'):
             detected_clock = detect_clock_sync()
@@ -78,6 +85,12 @@ class DataTracker(Node):
             'clock_sync_method': metadata['clock_sync_method'],
             'clock_reference': metadata.get('clock_reference', ''),
         }, event_id=f'clock:{socket.gethostname()}:{run_id}')
+
+        self._configuration_clients = {}
+        self._configuration_pending = set()
+        self._configuration_saved = set()
+        self.create_subscription(ParameterEvent, '/parameter_events', self._parameter_event, 100)
+        self.create_timer(2.0, self._capture_configuration)
 
         pipeline_topic = self.declare_parameter(
             'pipeline_topic', '/drone/comm/pipeline_metrics').value
@@ -170,6 +183,77 @@ class DataTracker(Node):
         if self.store.record(*args, **kwargs):
             self.event_count += 1
 
+    @staticmethod
+    def _runtime_artifacts():
+        # Installed binary/config hashes still identify code when Docker omits .git.
+        output = {}
+        for package, executable in (('surf_drone', 'drone_scan_sender'),
+                                    ('surf_humanoid', 'drone_data_receiver'),
+                                    ('surf_data_tracker', 'data_tracker')):
+            try:
+                prefix = Path(get_package_prefix(package))
+                paths = [prefix / 'lib' / package / executable]
+                paths += list((prefix / 'share' / package / 'config').glob('*.yaml'))
+                for path in paths:
+                    if path.is_file():
+                        output[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except (LookupError, OSError):
+                continue
+        # The entry point alone does not fingerprint Python implementation.
+        for path in Path(__file__).resolve().parent.glob('*.py'):
+            output[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (Path('/config/robot.yaml'), Path('/config/transport.yaml')):
+            if path.is_file():
+                output[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return output
+
+    @staticmethod
+    def _tracked_node(name):
+        return name.rsplit('/', 1)[-1] in (
+            'drone_scan_sender', 'drone_data_receiver', 'halow_capacity_provider',
+            'halow_bridge', 'halow_control_bridge')
+
+    def _parameter_event(self, event):
+        if not self._tracked_node(event.node):
+            return
+        values = {p.name: parameter_value_to_python(p.value)
+                  for p in (*event.new_parameters, *event.changed_parameters)}
+        self._record('configuration', 'runtime', event.node,
+                     {'parameters': values, 'deleted': [p.name for p in event.deleted_parameters],
+                      'kind': 'parameter_event'}, wall_time_ns=_stamp_ns(event.stamp))
+
+    def _capture_configuration(self):
+        for name, namespace in self.get_node_names_and_namespaces():
+            node = namespace.rstrip('/') + '/' + name
+            if not self._tracked_node(node) or node in self._configuration_saved or node in self._configuration_pending:
+                continue
+            client = self._configuration_clients.setdefault(node, None)
+            if client is None:
+                client = AsyncParameterClient(self, node)
+                self._configuration_clients[node] = client
+            if not client.services_are_ready():
+                continue
+            self._configuration_pending.add(node)
+            def listed(future, node=node, client=client):
+                try:
+                    names = future.result().result.names
+                    def captured(result):
+                        try:
+                            values = dict(zip(names, (parameter_value_to_python(v)
+                                                      for v in result.result().values)))
+                            self._record('configuration', 'runtime', node,
+                                         {'parameters': values, 'kind': 'initial_snapshot'})
+                            self._configuration_saved.add(node)
+                        except Exception as error:
+                            self.get_logger().warning(f'Parameter snapshot failed for {node}: {error}')
+                        finally:
+                            self._configuration_pending.discard(node)
+                    client.get_parameters(names, callback=captured)
+                except Exception as error:
+                    self._configuration_pending.discard(node)
+                    self.get_logger().warning(f'Parameter listing failed for {node}: {error}')
+            client.list_parameters(callback=listed)
+
     def _allocation(self, m):
         payload = {}
         for name in m.get_fields_and_field_types():
@@ -245,6 +329,10 @@ class DataTracker(Node):
         payload = {'protocol': 'information', 'traffic_class': m.traffic_class, 'wire_bytes': m.wire_bytes,
                    'source_id': m.source_id, 'map_epoch': m.map_epoch, 'version': m.version,
                    'voxel_count': m.voxel_count, 'decode_ms': m.decode_latency_ms,
+                   'accepted_voxel_count': m.accepted_voxel_count,
+                   'oldest_accepted_observation_age_s': m.oldest_accepted_observation_age_s,
+                   'newest_accepted_observation_age_s': m.newest_accepted_observation_age_s,
+                   'mean_accepted_observation_age_s': m.mean_accepted_observation_age_s,
                    'chunk_index': m.chunk_index, 'chunk_count': m.chunk_count,
                    'codec_reconstruction_ms': m.codec_reconstruction_ms,
                    'receiver_processing_ms': m.receiver_processing_ms,

@@ -195,3 +195,24 @@ class AnalysisTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class AllocationCounterSummaryTest(unittest.TestCase):
+    def test_counter_total_differences_each_epoch_and_keeps_signed_disturbance(self):
+        events = [dict(wall_time_ns=i, host='drone', category='allocation', pipeline='debt',
+                       stage='controller', payload=dict(source_id='drone', map_epoch=epoch,
+                       generated_debt_0=generated, disturbance_0=disturbance))
+                  for i, (epoch, generated, disturbance) in enumerate(
+                      [(1, 100, 50), (1, 120, 40), (2, 500, 100), (2, 530, 105)])]
+        rows = {r['metric']: r for r in build_summary(events)}
+        self.assertEqual(rows['generated_debt_0']['total'], 50)
+        self.assertEqual(rows['disturbance_0']['total'], -5)
+        self.assertTrue(all(r['total'] is None for r in build_timeseries(events, 1)
+                            if r['metric'] in ('generated_debt_0', 'disturbance_0')))
+
+    def test_observation_ages_and_unresolved_one_way_latency(self):
+        event = dict(category='delivery', pipeline='communication', stage='backlog',
+                     clock_valid=True, cross_host_clock_uncertainty_ms=68,
+                     payload=dict(sender_to_receiver_ms=10, oldest_accepted_observation_age_s=57))
+        rows = {r[3]: r for r in derived_measurements(event)}
+        self.assertEqual(rows['one_way_below_clock_uncertainty'][5], 1)
+        self.assertEqual(rows['oldest_accepted_observation_age_s'][4:6], ('s', 57))

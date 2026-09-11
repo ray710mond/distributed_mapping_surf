@@ -85,6 +85,18 @@ public:
       }
     }
   }
+  void ack(uint64_t packet, const std::vector<Coord> & coordinates) {
+    if (!packet) return;
+    for (const auto & c : coordinates) {
+      auto it = entries.find(c);
+      if (it == entries.end()) continue;
+      auto & e = it->second;
+      if (e.pending && e.packet == packet) {
+        acknowledged[e.stream] += e.priority; e.pending = false; e.packet = 0;
+        e.acknowledged_stamp = e.stamp;
+      }
+    }
+  }
   std::array<double, 2> score(double now, const std::array<PriorityWeights, 2> & weights,
     const tf2::Vector3 & peer, double resolution, bool peer_valid = true) {
     std::array<double, 2> debt{};
@@ -100,17 +112,22 @@ public:
     }
     return debt;
   }
-  std::vector<Entry *> candidates(int stream) {
+  std::vector<Entry *> candidates(int stream, std::size_t limit = std::numeric_limits<std::size_t>::max()) {
     std::vector<Entry *> out;
     for (auto & [c, e] : entries) {
       (void)c; if (e.pending && !e.packet && e.stream == stream) out.push_back(&e);
     }
-    std::sort(out.begin(), out.end(), [](const auto * a, const auto * b) {
+    const auto higher_priority = [](const auto * a, const auto * b) {
       if (a->priority != b->priority) return a->priority > b->priority;
       if (a->stamp != b->stamp) return a->stamp < b->stamp;
       return std::tie(a->coord.x, a->coord.y, a->coord.z) <
         std::tie(b->coord.x, b->coord.y, b->coord.z);
-    });
+    };
+    if (out.size() > limit) {
+      std::nth_element(out.begin(), out.begin() + limit, out.end(), higher_priority);
+      out.resize(limit);
+    }
+    std::sort(out.begin(), out.end(), higher_priority);
     return out;
   }
 };

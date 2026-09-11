@@ -10,6 +10,10 @@ TEST(Receiver, SpatialReorderingBacklogRetryAndEpochRejection) {
     using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
     using Delta = surf_multirobot_msgs::msg::VoxelDelta;
     using Ack = surf_multirobot_msgs::msg::SyncAck;
+    std::vector<surf_multirobot_msgs::msg::DeliveryMetrics> metrics;
+    auto metric_sub = probe->create_subscription<surf_multirobot_msgs::msg::DeliveryMetrics>(
+      "/humanoid/comm/delivery_metrics", 100,
+      [&](const surf_multirobot_msgs::msg::DeliveryMetrics & m) {metrics.push_back(m);});
     std::vector<Delta> received; std::vector<Ack> acks;
     auto delta_pub = probe->create_publisher<Packet>("/humanoid/transport/realtime_tx", surf::comms::realtime_qos());
     auto backlog_pub = probe->create_publisher<Packet>("/humanoid/transport/sync_tx", surf::comms::sync_qos());
@@ -33,6 +37,14 @@ TEST(Receiver, SpatialReorderingBacklogRetryAndEpochRejection) {
     ASSERT_EQ(received.size(),4U);
     EXPECT_EQ(received[0].x.size(),1U);EXPECT_TRUE(received[1].x.empty());
     EXPECT_EQ(received[2].x.size(),1U);EXPECT_TRUE(received[3].x.empty());
+    ASSERT_EQ(metrics.size(), 4U);
+    EXPECT_GT(metrics[0].decode_latency_ms, 0);
+    EXPECT_TRUE(std::isnan(metrics[0].end_to_end_latency_ms));
+    EXPECT_EQ(metrics[0].accepted_voxel_count, 1U);
+    EXPECT_GT(metrics[0].oldest_accepted_observation_age_s, 1000000);
+    EXPECT_LT(metrics[0].sensor_to_receiver_ms, 1000);
+    EXPECT_EQ(metrics[1].accepted_voxel_count, 0U);
+    EXPECT_TRUE(std::isnan(metrics[1].mean_accepted_observation_age_s));
     EXPECT_EQ(acks.size(),3U); // stale retries still ACKed
     send(1,110,12,false,2);send(1,120,13,true,1);
     EXPECT_EQ(received.size(),5U); // retired epoch never reactivates

@@ -1,5 +1,8 @@
 # Information allocator implementation report
 
+This records the initial migration. Subsequent scheduling, telemetry and validation
+changes are documented in [the indoor-test fixes](indoor_test_fixes.md).
+
 Completed implementation and local validation on 2026-09-11. Changes are uncommitted and have not been deployed to either robot. See [the architecture and tuning guide](information_allocation.md) for the full protocol, formulas and operational instructions.
 
 ## Implemented behavior

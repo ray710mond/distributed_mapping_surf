@@ -115,3 +115,68 @@ TEST(InformationDelivery, ReoccupyingClearedStaticPriorCreatesNewDebt)
   }
   rclcpp::shutdown();
 }
+
+TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCredit)
+{
+  rclcpp::init(0, nullptr);
+  {
+    auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
+      rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("maximum_clear_rays", int64_t(1)),
+      rclcpp::Parameter("allocation.dt", .2),
+      rclcpp::Parameter("scheduling.delta_hz", 5.),
+      rclcpp::Parameter("scheduling.backlog_hz", 5.),
+      rclcpp::Parameter("delivery.ack_timeout_seconds", 10.),
+      rclcpp::Parameter("capacity.development_bytes_per_second", 10000.)}));
+    auto probe = std::make_shared<rclcpp::Node>("large_debt_probe");
+    using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
+    using Metrics = surf_multirobot_msgs::msg::AllocationMetrics;
+    std::vector<Metrics> metrics;
+    std::size_t packet_bytes = 0;
+    auto receive = [&](const Packet & p) {
+      rclcpp::Serialization<Packet> serializer; rclcpp::SerializedMessage serialized;
+      serializer.serialize_message(&p, &serialized);
+      EXPECT_LE(serialized.size(), 1200U);
+      packet_bytes += serialized.size();
+    };
+    auto delta = probe->create_subscription<Packet>("/drone/transport/realtime_tx",surf::comms::realtime_qos(),receive);
+    auto backlog = probe->create_subscription<Packet>("/drone/transport/sync_tx",surf::comms::sync_qos(),receive);
+    auto metric_sub = probe->create_subscription<Metrics>("/drone/comm/allocation_metrics",100,
+      [&](const Metrics & m) {metrics.push_back(m);});
+    auto pub = probe->create_publisher<sensor_msgs::msg::PointCloud2>("/drone/points",rclcpp::SensorDataQoS());
+    rclcpp::executors::SingleThreadedExecutor exec; exec.add_node(sender); exec.add_node(probe);
+    auto spin = [&](double seconds) {
+      const auto end = std::chrono::steady_clock::now()+std::chrono::duration<double>(seconds);
+      while (std::chrono::steady_clock::now()<end) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+    };
+    spin(.3);
+    sensor_msgs::msg::PointCloud2 cloud;cloud.header.frame_id="map";cloud.header.stamp=probe->now();
+    sensor_msgs::PointCloud2Modifier mod(cloud);mod.setPointCloud2FieldsByString(1,"xyz");mod.resize(60000);
+    sensor_msgs::PointCloud2Iterator<float> x(cloud,"x"),y(cloud,"y"),z(cloud,"z");
+    for(int i=0;i<60000;++i,++x,++y,++z) {*x=2+(i%200)*.06F;*y=(i/200%100)*.06F;*z=1+(i/20000)*.06F;}
+    pub->publish(cloud);spin(3.5);
+    double shared=0,total=0,active_time=0; std::array<double,2> credits{};
+    bool multiple=false; uint64_t peak=0;
+    for(const auto & m:metrics) {
+      const double elapsed=std::min(m.actual_dt,2*m.nominal_dt);
+      shared=std::min(std::max(1200.,m.usable_capacity*2*m.nominal_dt),shared+m.usable_capacity*elapsed);
+      for(int i=0;i<2;++i) {
+        credits[i]=std::min(std::max(1200.,m.allocated_rate[i]*2*m.nominal_dt),credits[i]+m.allocated_rate[i]*elapsed);
+        if(!m.pending_count[i]) credits[i]=0;
+        EXPECT_LE(m.wire_bytes[i],std::min(shared,credits[i])+1e-6);
+        credits[i]-=m.wire_bytes[i];shared-=m.wire_bytes[i];total+=m.wire_bytes[i];
+        multiple=multiple || m.wire_bytes[i]>1200;
+      }
+      peak=std::max(peak,m.pending_count[0]+m.pending_count[1]);
+      if(m.pending_count[0]+m.pending_count[1]) active_time+=elapsed;
+    }
+    EXPECT_GT(peak,53000U);
+    EXPECT_TRUE(multiple);
+    RecordProperty("offered_bytes_per_second", total / active_time);
+    RecordProperty("peak_pending_voxels", static_cast<int>(peak));
+    EXPECT_GT(total,active_time*10000*.75);
+    EXPECT_EQ(packet_bytes,static_cast<std::size_t>(total));
+    exec.remove_node(sender);exec.remove_node(probe);
+  }
+  rclcpp::shutdown();
+}

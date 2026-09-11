@@ -24,3 +24,9 @@ uint64 stale_voxels_rejected
 uint64 applied_temporal_regressions
 
 uint64 attempted_temporal_regressions
+
+# Ages of accepted voxel observation stamps, not the latest scan header.
+uint32 accepted_voxel_count
+float64 oldest_accepted_observation_age_s
+float64 newest_accepted_observation_age_s
+float64 mean_accepted_observation_age_s

@@ -333,7 +333,7 @@ public:
   }
 
 private:
-  struct DeliveryAttempt {double sent; int stream;};
+  struct DeliveryAttempt {double sent; int stream; std::vector<Coord> coordinates;};
   std::unordered_map<uint64_t, DeliveryAttempt> attempts_;
   void delivery_metric(uint64_t version, const DeliveryAttempt & attempt, bool acknowledged) {
     surf_multirobot_msgs::msg::RealtimeAckMetrics m;
@@ -347,7 +347,7 @@ private:
   void acknowledge_packet(uint64_t version, int stream) {
     auto it = attempts_.find(version);
     if (it == attempts_.end() || it->second.stream != stream) return;
-    debt_.ack(version); delivery_metric(version, it->second, true); attempts_.erase(it);
+    debt_.ack(version, it->second.coordinates); delivery_metric(version, it->second, true); attempts_.erase(it);
   }
   void realtime_ack_callback(const surf_multirobot_msgs::msg::RealtimeAck::SharedPtr ack)
   {
@@ -506,9 +506,7 @@ private:
 
   void process_cloud(const sensor_msgs::msg::PointCloud2 & cloud, float queue_wait_ms)
   {
-    std::lock_guard<std::mutex> state_lock(state_mutex_);
     const auto processing_start = std::chrono::steady_clock::now();
-    if (have_scan_stamp_ && stamp_to_nanoseconds(cloud.header.stamp) <= last_scan_stamp_) {++debt_.stale_observations; return;}
     geometry_msgs::msg::TransformStamped transform;
     try {
       transform = resolve_transform(cloud);
@@ -572,6 +570,8 @@ private:
       std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - raw_serialization_start).count());
 
+    std::unique_lock<std::mutex> state_lock(state_mutex_);
+    if (have_scan_stamp_ && stamp_to_nanoseconds(cloud.header.stamp) <= last_scan_stamp_) {++debt_.stale_observations; return;}
     last_scan_stamp_ = stamp_to_nanoseconds(cloud.header.stamp);
     have_scan_stamp_ = true;
     ++version_;
@@ -653,6 +653,10 @@ private:
       }
     }
     const auto occupancy_selection_complete = std::chrono::steady_clock::now();
+    // cells_, tombstones_ and dynamic_expiry_ belong exclusively to the scan worker.
+    // Ray tracing does not touch the shared debt ledger. Let control and ACKs run
+    // while this expensive local map work finishes; commit its observations below.
+    state_lock.unlock();
 
     std::unordered_set<Coord, CoordHash> traversed_known;
     const std::size_t maximum_clear_rays = static_cast<std::size_t>(maximum_clear_rays_);
@@ -717,6 +721,7 @@ private:
       std::chrono::duration<double, std::milli>(
         clearing_complete - occupancy_selection_complete).count());
 
+    state_lock.lock();
     for (std::size_t i = 0; i < realtime.x.size(); ++i) {
       debt_.observe({realtime.x[i], realtime.y[i], realtime.z[i]}, realtime.state[i],
         realtime.observation_time_ns[i], steady_seconds(),
@@ -813,7 +818,8 @@ private:
     const double actual_dt = last_control_time_ ? start - last_control_time_ : control_dt_;
     last_control_time_ = start;
     // Bound catch-up after executor stalls. Credits represent saved allocation,
-    // with a one-packet burst ceiling, shared by both logical streams.
+    // with at most two nominal intervals of credit (minimum one packet).
+    // Both classes debit the same bounded credit; no unlimited catch-up.
     const double elapsed = std::min(actual_dt, control_dt_ * 2);
     for (auto it = attempts_.begin(); it != attempts_.end();) {
       if (start - it->second.sent >= realtime_ack_timeout_seconds_) {
@@ -847,7 +853,8 @@ private:
     auto allocation = allocator_.allocate({x[0], x[1]}, capacity);
     const double controller_ms = (steady_seconds() - controller_start)*1000;
     if (capacity == 0) {credits_ = {}; shared_credit_ = 0;}
-    shared_credit_ = std::min(double(maximum_packet_bytes_), shared_credit_ + capacity * elapsed);
+    shared_credit_ = std::min(std::max(double(maximum_packet_bytes_), capacity * control_dt_ * 2),
+      shared_credit_ + capacity * elapsed);
     surf_multirobot_msgs::msg::AllocationMetrics m;
     m.header.stamp = now(); m.source_id = robot_name_; m.map_epoch = map_epoch_;
     m.controller_ms = controller_ms; m.priority_ms = (controller_start-priority_start)*1000;
@@ -889,59 +896,74 @@ private:
       m.requested_rate[stream] = allocation.requested[stream];
       m.allocated_rate[stream] = allocation.allocated[stream];
       m.target_bytes[stream] = allocation.allocated[stream] * control_dt_;
-      credits_[stream] = std::min(double(maximum_packet_bytes_),
+      credits_[stream] = std::min(std::max(double(maximum_packet_bytes_),
+        allocation.allocated[stream] * control_dt_ * 2),
         credits_[stream] + allocation.allocated[stream] * elapsed);
       if (m.pending_count[stream] == 0) {credits_[stream] = 0; continue;}
       if (start - last_scheduled_[stream] < 1.0 / schedule_hz_[stream]) continue;
       last_scheduled_[stream] = start;
       const double ordering_start = steady_seconds();
-      auto candidates = debt_.candidates(stream);
+      auto candidates = debt_.candidates(stream, maximum_packet_bytes_ * 2);
       m.priority_ms += (steady_seconds()-ordering_start)*1000;
       if (candidates.empty()) continue;
-      surf_multirobot_msgs::msg::VoxelDelta delta;
-      delta.header = last_header_; delta.source_id = robot_name_; delta.map_epoch = map_epoch_;
-      delta.version = packet_version_ + 1; delta.operating_mode = 4;
-      delta.resolution = resolution_; delta.sensor_origin = last_origin_;
-      delta.chunk_count = 1; // Independently ACKed packets; no cross-packet assembly dependency.
-      const double budget = std::min(credits_[stream], shared_credit_);
-      surf_multirobot_msgs::msg::CompressedVoxelDelta best;
-      std::size_t count = 0, bytes = 0;
-      // Bounded trial encoding: exact CDR cost, keeping a priority prefix.
-      // Halving avoids assuming compressed size is monotone in record count.
-      std::size_t trial = std::min<std::size_t>(candidates.size(), maximum_packet_bytes_);
-      const double encoding_start = steady_seconds();
-      while (trial > 0) {
-        delta.x.clear(); delta.y.clear(); delta.z.clear(); delta.state.clear(); delta.observation_time_ns.clear();
-        for (std::size_t j = 0; j < trial; ++j)
-          append_record(delta, candidates[j]->coord, candidates[j]->state, candidates[j]->stamp);
-        surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
-        const auto result = surf::comms::encode_delta(delta, wire, compression_level_);
-        if (!result.ok) {RCLCPP_ERROR(get_logger(), "%s", result.error.c_str()); break;}
-        wire.traffic_class = stream == 0 ? 1 : 2; wire.transmit_stamp = now();
-        rclcpp::Serialization<surf_multirobot_msgs::msg::CompressedVoxelDelta> serializer;
-        rclcpp::SerializedMessage serialized; serializer.serialize_message(&wire, &serialized);
-        if (serialized.size() <= budget && serialized.size() <= maximum_packet_bytes_) {
-          best = std::move(wire); count = trial; bytes = serialized.size(); break;
+      std::size_t offset = 0;
+      // Bound callback work while allowing small packets to consume accrued credit.
+      for (int packet = 0; packet < 16 && offset < candidates.size(); ++packet) {
+        if (std::min(credits_[stream], shared_credit_) <= 0) break;
+        surf_multirobot_msgs::msg::VoxelDelta delta;
+        delta.header = last_header_; delta.source_id = robot_name_; delta.map_epoch = map_epoch_;
+        delta.version = packet_version_ + 1; delta.operating_mode = 4;
+        delta.resolution = resolution_; delta.sensor_origin = last_origin_;
+        delta.chunk_count = 1; // Independently ACKed packets; no cross-packet assembly dependency.
+        const double budget = std::min({credits_[stream], shared_credit_, double(maximum_packet_bytes_)});
+        surf_multirobot_msgs::msg::CompressedVoxelDelta best;
+        std::size_t count = 0, bytes = 0;
+        // Bounded prefix search retains only explicitly encoded fitting candidates.
+        // Nonmonotone compression may miss a larger fit, never exceed the budget.
+        std::size_t trial = std::min<std::size_t>(candidates.size() - offset, maximum_packet_bytes_);
+        std::size_t low = 0, high = trial;
+        const double encoding_start = steady_seconds();
+        for (int encoding_trial = 0; trial > low && encoding_trial < 12; ++encoding_trial) {
+          delta.x.clear(); delta.y.clear(); delta.z.clear(); delta.state.clear(); delta.observation_time_ns.clear();
+          for (std::size_t j = 0; j < trial; ++j)
+            append_record(delta, candidates[offset+j]->coord, candidates[offset+j]->state, candidates[offset+j]->stamp);
+          surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
+          const auto result = surf::comms::encode_delta(delta, wire, compression_level_);
+          if (!result.ok) {RCLCPP_ERROR(get_logger(), "%s", result.error.c_str()); break;}
+          wire.traffic_class = stream == 0 ? 1 : 2; wire.transmit_stamp = now();
+          rclcpp::Serialization<surf_multirobot_msgs::msg::CompressedVoxelDelta> serializer;
+          rclcpp::SerializedMessage serialized; serializer.serialize_message(&wire, &serialized);
+          if (serialized.size() <= budget && serialized.size() <= maximum_packet_bytes_) {
+            best = std::move(wire); count = trial; bytes = serialized.size(); low = trial;
+          } else {
+            high = trial - 1;
+          }
+          if (low >= high) break;
+          trial = low + (high - low + 1) / 2;
         }
-        trial /= 2;
+        m.encoding_ms += (steady_seconds() - encoding_start)*1000;
+        if (!count) break;
+        ++packet_version_;
+        const double sent_at = steady_seconds();
+        best.transmit_stamp = now();
+        auto & attempt = attempts_[packet_version_];
+        attempt.sent = sent_at; attempt.stream = stream; attempt.coordinates.reserve(count);
+        for (std::size_t j = 0; j < count; ++j) {
+          auto * candidate = candidates[offset+j];
+          candidate->packet = packet_version_; candidate->sent = sent_at;
+          attempt.coordinates.push_back(candidate->coord);
+          m.sent_priority[stream] += candidate->priority;
+          m.max_priority_sent[stream] = std::max(m.max_priority_sent[stream], candidate->priority);
+        }
+        credits_[stream] -= bytes; shared_credit_ -= bytes;
+        m.selected_count[stream] += count; m.wire_bytes[stream] += bytes;
+        m.uncompressed_bytes[stream] += best.uncompressed_bytes;
+        m.compressed_bytes[stream] += best.payload.size();
+        if (m.codec[stream].empty()) m.codec[stream] = best.codec;
+        else if (m.codec[stream] != best.codec) m.codec[stream] = "mixed";
+        (stream == 0 ? realtime_publisher_ : backlog_publisher_)->publish(best);
+        offset += count;
       }
-      m.encoding_ms += (steady_seconds() - encoding_start)*1000;
-      if (!count) continue;
-      ++packet_version_;
-      const double sent_at = steady_seconds();
-      best.transmit_stamp = now();
-      attempts_[packet_version_] = {sent_at, stream};
-      for (std::size_t j = 0; j < count; ++j) {
-        candidates[j]->packet = packet_version_; candidates[j]->sent = sent_at;
-        m.sent_priority[stream] += candidates[j]->priority;
-        m.max_priority_sent[stream] = std::max(m.max_priority_sent[stream], candidates[j]->priority);
-      }
-      credits_[stream] -= bytes; shared_credit_ -= bytes;
-      m.selected_count[stream] = count; m.wire_bytes[stream] = bytes;
-      m.uncompressed_bytes[stream] = best.uncompressed_bytes;
-      m.compressed_bytes[stream] = best.payload.size();
-      m.codec[stream] = best.codec;
-      (stream == 0 ? realtime_publisher_ : backlog_publisher_)->publish(best);
     }
     m.computation_ms = (steady_seconds() - start) * 1000;
     allocation_publisher_->publish(m);

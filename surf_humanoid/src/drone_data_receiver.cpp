@@ -1,3 +1,4 @@
+#include <limits>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -137,6 +138,7 @@ private:
     const auto started = std::chrono::steady_clock::now();
     surf_multirobot_msgs::msg::VoxelDelta delta;
     const auto decoded = surf::comms::decode_delta(packet, delta, maximum_uncompressed_bytes_);
+    const auto decoded_at = std::chrono::steady_clock::now();
     if (!decoded.ok || packet.source_id.empty() || packet.full_refresh ||
       packet.chunk_index != 0 || packet.chunk_count != 1 ||
       !std::isfinite(packet.resolution) || packet.resolution <= 0 ||
@@ -163,6 +165,27 @@ private:
     m.header.stamp = now(); m.sensor_stamp = packet.header.stamp; m.transmit_stamp = packet.transmit_stamp;
     m.source_id = packet.source_id; m.map_epoch = packet.map_epoch; m.version = packet.version;
     m.traffic_class = packet.traffic_class; m.voxel_count = packet.voxel_count; m.chunk_count = 1;
+    m.decode_latency_ms = std::chrono::duration<double, std::milli>(decoded_at - started).count();
+    m.codec_reconstruction_ms = m.decode_latency_ms; // decode_delta includes codec reconstruction.
+    // No downstream map integration ACK is available; do not report default zero latency.
+    m.end_to_end_latency_ms = std::numeric_limits<float>::quiet_NaN();
+    m.transport_latency_ms = std::numeric_limits<float>::quiet_NaN();
+    m.accepted_voxel_count = delta.observation_time_ns.size();
+    m.oldest_accepted_observation_age_s = m.newest_accepted_observation_age_s =
+      m.mean_accepted_observation_age_s = std::numeric_limits<double>::quiet_NaN();
+    if (m.accepted_voxel_count) {
+      const double observation_now = now().seconds();
+      double sum_age = 0;
+      m.oldest_accepted_observation_age_s = -std::numeric_limits<double>::infinity();
+      m.newest_accepted_observation_age_s = std::numeric_limits<double>::infinity();
+      for (const auto stamp : delta.observation_time_ns) {
+        const double age = observation_now - stamp / 1e9;
+        sum_age += age;
+        m.oldest_accepted_observation_age_s = std::max(m.oldest_accepted_observation_age_s, age);
+        m.newest_accepted_observation_age_s = std::min(m.newest_accepted_observation_age_s, age);
+      }
+      m.mean_accepted_observation_age_s = sum_age / m.accepted_voxel_count;
+    }
     m.accepted = true; m.stale_voxels_rejected = temporal.stale - stale_before;
     m.applied_temporal_regressions = 0;
     m.attempted_temporal_regressions = temporal.attempted_regressions - regressions_before;

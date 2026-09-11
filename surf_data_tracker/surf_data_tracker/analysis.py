@@ -182,18 +182,25 @@ def derived_measurements(event):
                      'sequence_gap_updates', 'update_loss_pct', 'update_complete',
                      'jitter_ms', 'decode_ms', 'stale_voxels_rejected',
                      'attempted_temporal_regressions', 'applied_temporal_regressions',
-                     'codec_reconstruction_ms', 'receiver_processing_ms'):
+                     'codec_reconstruction_ms', 'receiver_processing_ms', 'accepted_voxel_count'):
             unit = ('bytes' if name.endswith('_bytes') else 'ms' if name.endswith('_ms')
                     else 'pct' if name.endswith('_pct') else 'count')
             yield category, pipeline, stage, name, unit, p.get(name), 'measured', 'receiver-local observation'
         if event.get('clock_valid'):
             for name in ('sender_to_receiver_ms', 'sensor_to_receiver_ms', 'end_to_end_ms'):
                 yield category, pipeline, stage, name, 'ms', p.get(name), 'measured_clock_validated', 'requires synchronized sender and receiver clocks; interpret with the separately reported cross-host clock uncertainty'
+            for name in ('oldest_accepted_observation_age_s', 'newest_accepted_observation_age_s',
+                         'mean_accepted_observation_age_s'):
+                yield category, pipeline, stage, name, 's', p.get(name), 'measured_clock_validated', 'accepted voxel timestamps; not the packet scan header'
+            latency = p.get('sender_to_receiver_ms')
+            uncertainty = event.get('cross_host_clock_uncertainty_ms')
+            if latency is not None and uncertainty is not None:
+                yield category, pipeline, stage, 'one_way_below_clock_uncertainty', 'count', int(abs(latency) <= uncertainty), 'calculated', 'one-way latency magnitude cannot be resolved at the recorded clock uncertainty'
             yield category, pipeline, stage, 'cross_host_clock_uncertainty_ms', 'ms', event.get('cross_host_clock_uncertainty_ms'), 'calculated', 'conservative sum of sender and receiver clock uncertainty at tracker startup'
     else:
         units = {
             '_bytes': 'bytes', '_mbps': 'Mbps', '_ms': 'ms', '_pct': 'pct',
-            '_dbm': 'dBm', '_m': 'm', '_hz': 'Hz', '_packets': 'packets',
+            '_dbm': 'dBm', '_m': 'm', '_hz': 'Hz', '_s': 's', '_packets': 'packets',
             '_errors': 'count', '_dropped': 'count'}
         for name, value in p.items():
             # Linux/iw counters are cumulative since interface initialization.
@@ -209,19 +216,42 @@ def derived_measurements(event):
                 yield category, pipeline, stage, name, unit, value, 'measured', ''
 
 
+def _allocation_counter(category, metric):
+    return category == 'allocation' and (metric.startswith((
+        'generated_debt_', 'acknowledged_debt_', 'superseded_debt_',
+        'reclassified_debt_', 'disturbance_', 'timed_out_debt_', 'excluded_debt_')) or
+        metric in ('superseded_count', 'stale_observations', 'stale_pending_discarded',
+                   'rejected_matrix_updates'))
+
+
 def build_summary(events):
     groups = defaultdict(list)
-    for event in events:
+    counter_changes = defaultdict(float)
+    previous = {}
+    for event in sorted(events, key=lambda e: e.get('wall_time_ns', 0)):
         for row in derived_measurements(event):
             _add_metric(groups, *row)
+            category, pipeline, stage, metric, unit, value, measurement, note = row
+            if _allocation_counter(category, metric) and math.isfinite(value):
+                key = (category, pipeline, stage, metric, unit, measurement, note)
+                p = event['payload']
+                identity = (key, event.get('host'), p.get('source_id'), p.get('map_epoch'))
+                if identity in previous:
+                    change = value - previous[identity]
+                    if change >= 0 or metric.startswith('disturbance_'):
+                        counter_changes[key] += change
+                previous[identity] = value
     rows = []
     for key, values in sorted(groups.items()):
         category, pipeline, stage, metric, unit, measurement, note = key
         rows.append({
             'category': category, 'pipeline': pipeline, 'stage': stage,
             'metric': metric, 'unit': unit, 'measurement': measurement, 'note': note,
-            **describe(values), 'total': sum(values),
+            **describe(values), 'total': (counter_changes[key] if _allocation_counter(category, metric)
+                                          else sum(values)),
         })
+        if _allocation_counter(category, metric):
+            rows[-1]['note'] = 'total is observed counter change per source/epoch; excludes unknown initial value'
     return rows
 
 
@@ -371,7 +401,8 @@ def build_timeseries(events, window_s):
             'category': category, 'pipeline': pipeline, 'stage': stage,
             'metric': metric, 'unit': unit, 'measurement': measurement,
             'sample_count': stats['sample_count'], 'mean': stats['mean'],
-            'min': stats['min'], 'max': stats['max'], 'total': sum(values),
+            'min': stats['min'], 'max': stats['max'],
+            'total': None if _allocation_counter(category, metric) else sum(values),
         }
         row.update(host_context.get((window, host), {}))
         row.update(context.get((window, host, pipeline, stage), {}))
@@ -473,7 +504,8 @@ def analyze(run_directory, output=None, window_s=1.0, pose_max_age_ms=500.0,
         'timeseries_window_s': window_s, 'pose_sync_max_age_ms': pose_max_age_ms,
         'hosts': hosts, 'event_count_after_deduplication': len(events),
         'clock_warning': ('Cross-host one-way latency is valid only for hosts whose '
-                          'clock_sync_method is verified and uncertainty is recorded.'),
+                          'clock_sync_method is verified and uncertainty is recorded. Values smaller '
+                          'than that uncertainty are not resolved latency measurements.'),
         'unavailable_by_architecture': [
             'network_bridge private framing/compression bytes',
             'receiver Bonxai integration compute time',

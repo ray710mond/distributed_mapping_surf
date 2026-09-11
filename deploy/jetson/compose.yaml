@@ -22,6 +22,8 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     environment:
+      SURF_IMAGE_REFERENCE: surf-jazzy:${SURF_IMAGE_TAG:-latest}
+      SURF_IMAGE_DIGEST: ${SURF_IMAGE_DIGEST:-unavailable}
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID in the Jetson env file}
       LIVOX_HOST_IP: ${LIVOX_HOST_IP:?Set LIVOX_HOST_IP in the Jetson env file}

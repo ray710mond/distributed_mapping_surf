@@ -180,17 +180,22 @@ Zero capacity clears saved credits. One wall timer runs independently of scans;
 actual dt and computation timing are logged. Class scheduling frequencies default
 to 10 Hz; their opportunities cannot exceed the controller frequency. Allocated
 rate accrues byte credits, equivalent to rate/frequency bytes per opportunity.
-Each class credit and a shared capacity credit are bounded by one packet. This
-permits a packet-sized saved-credit burst, rather than pretending packets are
-continuous fluid. Combined cumulative publication is bounded by integrated shared
+Each class credit and the shared capacity credit are bounded by two nominal
+control intervals of their respective rate, with a one-packet minimum. This
+permits a bounded saved-credit burst; packets are not continuous fluid. At the
+development defaults the shared ceiling is 2000 bytes. A callback may publish
+multiple independently ACKed packets while debiting these same credits. Work is
+bounded to 16 packets per class per callback and 2400 candidates at the default
+1200-byte packet limit. Combined cumulative publication is bounded by integrated shared
 capacity plus credit saved before a measurement window. Executor catch-up is
 bounded to two nominal intervals.
 
-Candidates are sorted before encoding. A bounded trial encoder halves a priority
-prefix until the actual CDR serialized packet fits both its class credit and the
-shared credit, and the hard 1200-byte packet limit. It makes no monotonicity
-assumption about compression and never substitutes uncompressed voxel size for
-wire cost. Both classes debit the same shared credit. No local encoded retry
+Candidate selection partitions out a bounded highest-priority prefix before
+sorting that prefix, rather than sorting the entire pending map. Bounded trial
+encoding searches prefix sizes and retains the largest explicitly verified fit
+within both credits and the hard 1200-byte packet limit. Nonmonotone compression
+can make this search miss a larger feasible prefix, but cannot make a packet
+exceed its budget. Uncompressed voxel size never substitutes for wire cost. Both classes debit the same shared credit. No local encoded retry
 queue exists; downstream bridge FIFO may still contain already offered old
 packets, which the receiver safely rejects.
 
@@ -239,6 +244,10 @@ state; a two-state fitted model must be checked against held-out experiments.
 Indefinite temporal/deletion and receiver-recovery caches consume memory
 proportional to explored coordinates; safe compaction needs an explicit protocol,
 not a time-based deletion that permits stale resurrection.
+
+See [indoor-test fixes](indoor_test_fixes.md) for scheduling, radio caching,
+receiver observation-age metrics and experiment provenance added after the
+first indoor run.
 
 Map DDS publishers use volatile durability so a bridge reconnect cannot replay
 unbudgeted historical packets; outstanding ledger debt supplies paced recovery.

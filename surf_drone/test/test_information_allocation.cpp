@@ -88,3 +88,23 @@ TEST(Allocation, FeasibleForManyDebtAndCapacityPairs) {
     EXPECT_GE(p.allocated.minCoeff(),0);EXPECT_LE(p.allocated.sum(),capacity+1e-10);
   }
 }
+
+TEST(InformationDebtPerformance, BoundedSelectionMatchesFullOrderAndIndexedAck)
+{
+  surf_drone::InformationDebt debt;
+  for (int i = 0; i < 60000; ++i) {
+    debt.observe({i, i % 7, 0}, 1, 100 + i, 0, 1 + (i % 101));
+  }
+  auto all = debt.candidates(0);
+  auto selected = debt.candidates(0, 2400);
+  ASSERT_EQ(selected.size(), 2400U);
+  for (std::size_t i = 0; i < selected.size(); ++i) EXPECT_EQ(selected[i], all[i]);
+  const auto coord = selected[0]->coord;
+  const auto second = selected[1]->coord;
+  selected[0]->packet = selected[1]->packet = 42;
+  debt.observe(coord, 3, 100000, 1); // New observation invalidates old packet association.
+  debt.ack(42, {coord, second});
+  EXPECT_TRUE(debt.entries.at(coord).pending);
+  EXPECT_FALSE(debt.entries.at(second).pending);
+  EXPECT_TRUE(debt.candidates(0, 0).empty());
+}

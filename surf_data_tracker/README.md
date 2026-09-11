@@ -197,3 +197,11 @@ ACKs resolve matching packet debt; timeout leaves information pending for BACKLO
 
 Controller-step logging, runtime matrix revisions, capacity calibration and the
 `identify_allocation` utility are documented in the [allocation guide](../docs/information_allocation.md).
+
+The indoor-test follow-up adds fresh-sample MMRC caching, accepted voxel observation
+ages, measured decode timing, explicit unavailable end-to-end timing, and runtime
+parameter snapshots/events. Cumulative allocation counter totals are observed
+changes per source/epoch; timeseries totals for those raw counters are blank.
+Image reference and installed artifact fingerprints are included in run metadata;
+set `SURF_IMAGE_DIGEST` if a deployment digest is available. See
+[fixes and validation](../docs/indoor_test_fixes.md).
