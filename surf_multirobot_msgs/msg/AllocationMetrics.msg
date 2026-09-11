@@ -54,6 +54,7 @@ float64 controller_ms
 float64 debt_advance_ms
 float64 debt_score_ms
 float64 metrics_scan_ms
+float64 debt_cycle_ms
 float64[2] selection_ms
 float64 priority_ms
 float64 encoding_ms

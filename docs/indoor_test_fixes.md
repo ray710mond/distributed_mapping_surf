@@ -56,8 +56,23 @@ Both `/realtime_ack` and `/sync_ack` bridge inputs now use bounded FIFO queues,
 with a real-message burst regression covering 32 consecutive IDs per class.
 
 Routine debt traversal now uses an active pending index; retained resolved state
-is scanned only by explicit recovery. New allocation fields report total retained
-records and advance, scoring, metric-scan, and selection phase time. A default
+is scanned only by explicit recovery. Timeout/defer handling, scoring, age/state
+metrics, and per-class candidate collection now share one active-set traversal,
+reported as `debt_cycle_ms`. Selection ordering remains timed per class. A default
 10 percent candidate reserve selects entries pending at least 30 seconds oldest
 first, preventing the capped age score from starving the same early coordinates
 forever. See the second run's [full review](../../../../experiments/LQR_indoor_test_2/review.md).
+
+## Follow-up after `LQR_indoor_test_3`
+
+The third run had no ACK timeouts, bounded oldest pending age near 30.9 seconds,
+and restored the median controller interval to 100 ms. Phase telemetry showed
+that separate active-set passes still consumed most callback time: advance,
+scoring, metrics, and candidate collection repeatedly visited the same entries.
+
+Those operations now run in one `InformationDebt::cycle` traversal. It performs
+timeout/defer transitions, updates priorities and debt, accumulates all pending
+telemetry, and partitions selectable entries by class. Only bounded candidate
+ordering and encoding remain afterward. `debt_cycle_ms` measures the fused pass;
+the three legacy per-pass timing fields are retained as zero for schema clarity.
+See the third run's [full review](../../../../experiments/LQR_indoor_test_3/review.md).

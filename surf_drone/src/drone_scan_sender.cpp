@@ -831,9 +831,6 @@ private:
         delivery_metric(it->first, it->second, false); it = attempts_.erase(it);
       } else ++it;
     }
-    const double advance_start = steady_seconds();
-    debt_.advance(start, defer_seconds_, realtime_ack_timeout_seconds_);
-    const double advance_ms = (steady_seconds() - advance_start) * 1000;
     tf2::Vector3 peer(0, 0, 0);
     bool peer_valid = false;
     {
@@ -846,9 +843,12 @@ private:
         peer = tf2::Vector3(p.x, p.y, p.z);
       }
     }
-    const double priority_start = steady_seconds();
-    const auto x = debt_.score(start, weights_, peer, resolution_, peer_valid);
-    const double score_ms = (steady_seconds() - priority_start) * 1000;
+    const double debt_cycle_start = steady_seconds();
+    auto debt_cycle = debt_.cycle(
+      start, now().seconds(), defer_seconds_, realtime_ack_timeout_seconds_,
+      weights_, peer, resolution_, peer_valid);
+    const double debt_cycle_ms = (steady_seconds() - debt_cycle_start) * 1000;
+    const auto & x = debt_cycle.debt;
     double capacity = fallback_capacity_;
     std::string method = "development_configured";
     if (capacity_received_ > 0) {
@@ -865,8 +865,11 @@ private:
       shared_credit_ + capacity * elapsed);
     surf_multirobot_msgs::msg::AllocationMetrics m;
     m.header.stamp = now(); m.source_id = robot_name_; m.map_epoch = map_epoch_;
-    m.controller_ms = controller_ms; m.debt_advance_ms = advance_ms;
-    m.debt_score_ms = score_ms; m.priority_ms = score_ms;
+    m.controller_ms = controller_ms;
+    // These legacy fields are zero because advance, scoring, metrics, and
+    // candidate collection now share one traversal measured by debt_cycle_ms.
+    m.debt_advance_ms = 0; m.debt_score_ms = 0; m.metrics_scan_ms = 0;
+    m.debt_cycle_ms = debt_cycle_ms; m.priority_ms = debt_cycle_ms;
     m.step = ++control_sequence_; m.nominal_dt = control_dt_; m.actual_dt = actual_dt;
     m.debt = x; m.previous_debt = previous_debt_; previous_debt_ = x;
     m.usable_capacity = capacity; m.capacity_method = method;
@@ -884,30 +887,15 @@ private:
     }
     m.stale_pending_discarded = debt_.stale_pending_discarded;
     m.retained_count = debt_.entries.size();
-    const double observation_now = now().seconds();
-    bool first_pending = true;
-    const double metrics_start = steady_seconds();
-    for (const auto & c : debt_.active) {
-      const auto & e = debt_.entries.at(c);
-      {++m.pending_count[e.stream];
-        const double pending_age = std::max(0.0, start - e.created);
-        const int age_bucket = pending_age < 10 ? 0 : pending_age < 30 ? 1 :
-          pending_age < 60 ? 2 : 3;
-        ++m.pending_age_bucket_count[e.stream * 4 + age_bucket];
-        m.max_priority_remaining[e.stream] = std::max(m.max_priority_remaining[e.stream], e.priority);
-        m.oldest_pending_age = std::max(m.oldest_pending_age, start-e.created);
-        const double age = std::max(0.0, observation_now - e.stamp / 1e9);
-        m.oldest_observation_age_s = std::max(m.oldest_observation_age_s, age);
-        m.newest_observation_age_s = first_pending ? age : std::min(m.newest_observation_age_s, age);
-        first_pending = false;
-        if (e.acknowledged_stamp) {
-          ++m.ack_lag_samples;
-          m.max_ack_observation_lag_s = std::max(m.max_ack_observation_lag_s,
-            (e.stamp - e.acknowledged_stamp) / 1e9);
-        }
-        if (e.packet) ++m.inflight_count[e.stream];}
-    }
-    m.metrics_scan_ms = (steady_seconds() - metrics_start) * 1000;
+    m.pending_count = debt_cycle.pending_count;
+    m.inflight_count = debt_cycle.inflight_count;
+    m.pending_age_bucket_count = debt_cycle.pending_age_bucket_count;
+    m.max_priority_remaining = debt_cycle.max_priority_remaining;
+    m.ack_lag_samples = debt_cycle.ack_lag_samples;
+    m.oldest_pending_age = debt_cycle.oldest_pending_age;
+    m.oldest_observation_age_s = debt_cycle.oldest_observation_age_s;
+    m.newest_observation_age_s = debt_cycle.newest_observation_age_s;
+    m.max_ack_observation_lag_s = debt_cycle.max_ack_observation_lag_s;
     std::array<double, 2> selected_age_total{};
     for (int stream = 0; stream < 2; ++stream) {
       m.mean_priority_remaining[stream] = m.pending_count[stream] ? x[stream]/m.pending_count[stream] : 0;
@@ -923,8 +911,9 @@ private:
       const double ordering_start = steady_seconds();
       const auto reserve = static_cast<std::size_t>(std::ceil(
         maximum_packet_bytes_ * 0.25 * starvation_fraction_));
-      auto candidates = debt_.candidates(
-        stream, maximum_packet_bytes_ * 2, start, starvation_age_seconds_, reserve);
+      auto candidates = InformationDebt::rank_candidates(
+        std::move(debt_cycle.candidates[stream]), maximum_packet_bytes_ * 2,
+        start, starvation_age_seconds_, reserve);
       m.selection_ms[stream] = (steady_seconds()-ordering_start)*1000;
       m.priority_ms += m.selection_ms[stream];
       if (candidates.empty()) continue;

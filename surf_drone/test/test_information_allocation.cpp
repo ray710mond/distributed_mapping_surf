@@ -139,3 +139,40 @@ TEST(Priority, StarvationReservePrecedesHigherPriorityFreshDebt)
   // Without a reserve, normal priority order remains unchanged.
   EXPECT_FALSE(debt.candidates(0, 10).front()->coord == old_low);
 }
+
+TEST(Debt, FusedCycleTraversesAndAggregatesOnce)
+{
+  InformationDebt debt;
+  const Coord deferred{1, 0, 0};
+  const Coord inflight{2, 0, 0};
+  const Coord timed_out{3, 0, 0};
+  debt.observe(deferred, 1, 1000000000, 0);
+  debt.observe(inflight, 2, 2000000000, 9);
+  debt.observe(timed_out, 3, 3000000000, 0);
+  debt.entries.at(inflight).packet = 7;
+  debt.entries.at(inflight).sent = 9;
+  debt.entries.at(timed_out).packet = 8;
+  debt.entries.at(timed_out).sent = 0;
+  std::array<PriorityWeights, 2> weights{};
+
+  auto snapshot = debt.cycle(
+    10, 12, 0.2, 2, weights, tf2::Vector3(0, 0, 0), 1, false);
+
+  EXPECT_EQ(debt.entries.at(deferred).stream, 1);
+  EXPECT_EQ(debt.entries.at(timed_out).packet, 0U);
+  EXPECT_EQ(snapshot.pending_count[0], 1U);
+  EXPECT_EQ(snapshot.pending_count[1], 2U);
+  EXPECT_EQ(snapshot.inflight_count[0], 1U);
+  EXPECT_EQ(snapshot.candidates[0].size(), 0U);
+  EXPECT_EQ(snapshot.candidates[1].size(), 2U);
+  EXPECT_EQ(snapshot.pending_age_bucket_count[0], 1U);
+  EXPECT_EQ(snapshot.pending_age_bucket_count[5], 2U);
+  EXPECT_EQ(snapshot.pending_age_bucket_count[6], 0U);
+  EXPECT_DOUBLE_EQ(snapshot.debt[0], debt.entries.at(inflight).priority);
+  EXPECT_DOUBLE_EQ(
+    snapshot.debt[1], debt.entries.at(deferred).priority + debt.entries.at(timed_out).priority);
+  EXPECT_EQ(snapshot.ack_lag_samples, 0U);
+  EXPECT_DOUBLE_EQ(snapshot.oldest_pending_age, 10);
+  EXPECT_DOUBLE_EQ(snapshot.oldest_observation_age_s, 11);
+  EXPECT_DOUBLE_EQ(snapshot.newest_observation_age_s, 9);
+}

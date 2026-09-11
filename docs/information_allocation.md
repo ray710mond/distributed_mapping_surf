@@ -201,9 +201,11 @@ packets, which the receiver safely rejects.
 
 Routine control work iterates an active pending-coordinate index. Resolved
 coordinate history remains available for receiver recovery without increasing
-every score, timeout, metric, and selection pass. Allocation telemetry records
-active counts, total retained records, and advance, score, metric-scan, and
-per-class selection timing. It also records pending age buckets, selected
+routine controller work. Timeout/defer transitions, scoring, age/state metrics,
+and per-class candidate collection share one active-set traversal reported as
+`debt_cycle_ms`; bounded ordering remains timed per class in `selection_ms`.
+Legacy advance, score, and metric-scan timings are zero for the fused controller.
+Telemetry also records active and retained counts, pending age buckets, selected
 pending-age mean/max, old-entry selection counts, and selected occupancy states.
 
 To prevent permanent starvation after the normal priority age term saturates,
