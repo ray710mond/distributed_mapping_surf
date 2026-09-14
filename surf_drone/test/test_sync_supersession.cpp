@@ -128,6 +128,9 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
       rclcpp::Parameter("scheduling.backlog_hz", 5.),
       rclcpp::Parameter("scheduling.starvation_age_seconds", 0.),
       rclcpp::Parameter("scheduling.starvation_fraction", .1),
+      // This no-ACK throughput fixture keeps debt in BACKLOG. A long DELTA
+      // window leaves high-gain in-flight DELTA consuming requested allocation.
+      rclcpp::Parameter("delivery.defer_seconds", .1),
       rclcpp::Parameter("delivery.ack_timeout_seconds", 10.),
       rclcpp::Parameter("capacity.development_bytes_per_second", 10000.)}));
     auto probe = std::make_shared<rclcpp::Node>("large_debt_probe");

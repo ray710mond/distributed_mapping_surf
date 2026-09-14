@@ -1,4 +1,5 @@
-# Development LQR, priority and capacity defaults require experimental tuning.
+# Outdoor-informed starting point; see docs/outdoor_lqr_tuning.md for evidence
+# and limitations. Capacity and B remain uncalibrated development assumptions.
 /**/drone_scan_sender:
   ros__parameters:
     use_sim_time: false
@@ -26,7 +27,9 @@
       maximum_packet_bytes: 1200
     dynamic_retention_scans: 20
     maximum_ray_voxels: 1200
-    maximum_clear_rays: 4096
+    # Outdoor clearing took 264–323 ms median. Rotate a smaller ray subset;
+    # validate clearing latency in the next run (miss threshold stays unchanged).
+    maximum_clear_rays: 1024
     filters:
       min_range: 0.75
       max_range: 50.0
@@ -57,7 +60,8 @@
       - 0.0
       - -0.001
       q:
-      - 1.0
+      # Favor fresh debt without slowing isolated BACKLOG/tail drainage.
+      - 100.0
       - 0.0
       - 0.0
       - 1.0
@@ -67,8 +71,10 @@
       - 0.0
       - 0.0001
     delivery:
-      ack_timeout_seconds: 2.0
-      defer_seconds: 0.2
+      # Observed successful ACK RTT reached 2.64 s, including executor delays.
+      ack_timeout_seconds: 4.0
+      # Outdoor control intervals reached 1.00 s; allow a selection opportunity.
+      defer_seconds: 1.5
     capacity:
       development_bytes_per_second: 10000.0
       telemetry_timeout_seconds: 3.0

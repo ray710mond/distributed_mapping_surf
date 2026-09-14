@@ -114,7 +114,9 @@ K[k] = LQR(A[k], B[k], Q[k], R[k])
 u_requested = -K[k] x[k]
 ```
 
-Development defaults at dt=0.1 s are A=I, B=-0.001 I, Q=I, R=0.0001 I.
+Outdoor-informed starting defaults at dt=0.1 s are A=I, B=-0.001 I,
+Q=diag(100, 1), R=0.0001 I. See [outdoor tuning](outdoor_lqr_tuning.md) for
+the three-run diagnosis, comparison, delivery windows, and validation limits.
 Negative B explicitly models communication reducing debt; no absolute-value
 feedback workaround is used. Q/R are control costs, not Kalman covariances.
 The assumed B effectiveness requires identification with actual compression,

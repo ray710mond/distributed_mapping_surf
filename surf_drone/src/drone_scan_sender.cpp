@@ -148,7 +148,7 @@ public:
     compression_level_ = static_cast<int>(declare_parameter<int64_t>("compression_level", 1));
     maximum_packet_bytes_ = static_cast<std::size_t>(std::max<int64_t>(256,
       declare_parameter<int64_t>("transport.maximum_packet_bytes", 1200)));
-    realtime_ack_timeout_seconds_ = declare_parameter<double>("delivery.ack_timeout_seconds", 2.0);
+    realtime_ack_timeout_seconds_ = declare_parameter<double>("delivery.ack_timeout_seconds", 4.0);
     control_dt_ = declare_parameter<double>("allocation.dt", 0.1);
     schedule_hz_[0] = declare_parameter<double>("scheduling.delta_hz", 10.0);
     schedule_hz_[1] = declare_parameter<double>("scheduling.backlog_hz", 10.0);
@@ -156,7 +156,7 @@ public:
     starvation_age_seconds_ = declare_parameter<double>("scheduling.starvation_age_seconds", 30.0);
     for (double rate : schedule_hz_) if (!std::isfinite(rate) || rate <= 0)
       throw std::invalid_argument("scheduling frequencies must be finite and positive");
-    defer_seconds_ = declare_parameter<double>("delivery.defer_seconds", 0.1);
+    defer_seconds_ = declare_parameter<double>("delivery.defer_seconds", 1.5);
     fallback_capacity_ = declare_parameter<double>("capacity.development_bytes_per_second", 10000.0);
     capacity_timeout_ = declare_parameter<double>("capacity.telemetry_timeout_seconds", 3.0);
     for (int i = 0; i < 2; ++i) {
@@ -1032,7 +1032,7 @@ private:
   int maximum_clear_rays_{256};
   int compression_level_{1};
   std::size_t maximum_packet_bytes_{1200};
-  double realtime_ack_timeout_seconds_{2};
+  double realtime_ack_timeout_seconds_{4};
   uint64_t map_epoch_{0U};
   uint64_t version_{0U};
   uint64_t cumulative_raw_bytes_{0U};
@@ -1045,7 +1045,7 @@ private:
   InformationDebt debt_;
   std::array<PriorityWeights, 2> weights_;
   std::mutex state_mutex_;
-  double control_dt_{.1}, defer_seconds_{.1}, fallback_capacity_{10000}, capacity_timeout_{3};
+  double control_dt_{.1}, defer_seconds_{1.5}, fallback_capacity_{10000}, capacity_timeout_{3};
   double capacity_received_{0}, last_control_time_{0}, matrix_update_time_{0};
   std::array<double, 2> credits_{}, last_scheduled_{};
   std::array<double, 2> schedule_hz_{10,10};

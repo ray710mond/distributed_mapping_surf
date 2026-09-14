@@ -25,6 +25,45 @@ TEST(Allocation, AtomicMatrixValidation) {
   model.a(0,0) = NAN; EXPECT_FALSE(c.update(model, error));
   model = c.model(); model.q(0,1) = 1; EXPECT_FALSE(c.update(model, error));
 }
+TEST(Allocation, OutdoorCostsFavorDeltaWithoutSlowingBacklogTail) {
+  InformationAllocationController tuned, baseline;
+  auto old_model = baseline.model(); old_model.q.setIdentity();
+  std::string error;
+  ASSERT_TRUE(baseline.update(old_model, error));
+  ASSERT_GT(tuned.revision(), 0U);
+  // Representative outdoor imbalance: equal gains gave fresh debt about 1%.
+  const auto before = baseline.allocate({10000, 1000000}, 10000);
+  const auto after = tuned.allocate({10000, 1000000}, 10000);
+  EXPECT_GT(after.allocated[0], 6 * before.allocated[0]);
+  EXPECT_NEAR(after.allocated.sum(), 10000, 1e-8);
+  EXPECT_NEAR(tuned.allocate({0, 2}, 10000).allocated[1],
+    baseline.allocate({0, 2}, 10000).allocated[1], 1e-5);
+  EXPECT_DOUBLE_EQ(tuned.allocate({10000, 1000000}, 0).allocated.norm(), 0);
+}
+
+TEST(Debt, OutdoorDeliveryWindowSurvivesSlowCycleAndDelayedAck) {
+  InformationDebt debt;
+  const Coord coord{1, 0, 0};
+  debt.observe(coord, 1, 1, 0);
+  std::array<PriorityWeights, 2> weights{};
+  auto snapshot = debt.cycle(1.01, 1.01, 1.5, 4., weights, tf2::Vector3(0,0,0), .05, false);
+  ASSERT_EQ(snapshot.candidates[0].size(), 1U);
+  debt.entries.at(coord).packet = 7;
+  debt.entries.at(coord).sent = 1.01;
+  debt.advance(3.7, 1.5, 4.); // 2.69 s ACK delay must retain packet identity.
+  EXPECT_EQ(debt.entries.at(coord).packet, 7U);
+  debt.ack(7, {coord});
+  EXPECT_FALSE(debt.entries.at(coord).pending);
+  // Undelivered updates still defer; lost attempts still eventually time out.
+  debt.observe(coord, 2, 2, 4.);
+  debt.advance(5.6, 1.5, 4.);
+  EXPECT_EQ(debt.entries.at(coord).stream, 1);
+  debt.entries.at(coord).packet = 8;
+  debt.entries.at(coord).sent = 5.6;
+  debt.advance(9.7, 1.5, 4.);
+  EXPECT_EQ(debt.entries.at(coord).packet, 0U);
+  EXPECT_TRUE(debt.entries.at(coord).pending);
+}
 TEST(Debt, PriorityLifecycleAndSupersession) {
   InformationDebt d; const Coord a{1,0,0}, b{2,0,0};
   EXPECT_TRUE(d.observe(a, 1, 100, 0)); EXPECT_FALSE(d.observe(a, 2, 99, 0));

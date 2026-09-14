@@ -13,7 +13,8 @@ public:
   using State = Eigen::Vector2d;
   struct Model {
     Matrix a{Matrix::Identity()}, b{-0.001 * Matrix::Identity()};
-    Matrix q{Matrix::Identity()}, r{0.0001 * Matrix::Identity()};
+    // Outdoor starting costs: preserve DELTA service against much larger BACKLOG.
+    Matrix q{(Matrix() << 100.0, 0.0, 0.0, 1.0).finished()}, r{0.0001 * Matrix::Identity()};
   };
   struct Allocation {
     State requested{State::Zero()}, allocated{State::Zero()};
