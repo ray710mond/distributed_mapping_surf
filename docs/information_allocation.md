@@ -165,7 +165,7 @@ throughput is a driver rate-control statistic, not measured application goodput
 and not relabeled PHY rate. The live interface query in this development session
 returned “No such device”; no live usable capacity or RSSI was established.
 
-`experimental_mmrc_factor=0.1` reserves 90% provisional headroom; this is not a
+`experimental_mmrc_factor=0.2` reserves 80% provisional headroom; this is not a
 measured application-goodput ratio. The factor multiplies MMRC Mbps by 125000
 and selected-rate success probability to derive bytes/s. Calibration
 must reserve room for return ACKs, odometry, reliable startup/recovery control,

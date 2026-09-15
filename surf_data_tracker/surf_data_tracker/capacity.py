@@ -2,7 +2,7 @@
 import math
 
 
-def usable_capacity(telemetry, *, measured_application_bps=None, mmrc_factor=0.1):
+def usable_capacity(telemetry, *, measured_application_bps=None, mmrc_factor=0.2):
     """Use fresh Morse rate-control telemetry with reserved link headroom.
 
     Never use achieved throughput or the S1G nl80211 compatibility rate as capacity.
@@ -30,7 +30,7 @@ def main(args=None):
         def __init__(self):
             super().__init__('halow_capacity_provider')
             interface = self.declare_parameter('interface', 'wlx0cbf7400343c').value
-            self.factor = self.declare_parameter('experimental_mmrc_factor', 0.1).value
+            self.factor = self.declare_parameter('experimental_mmrc_factor', 0.2).value
             if not math.isfinite(self.factor) or not 0 < self.factor <= 1:
                 raise ValueError('experimental_mmrc_factor must be in (0, 1]')
             self.sampler = NetworkSampler({interface: 'halow'})

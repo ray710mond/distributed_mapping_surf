@@ -74,4 +74,4 @@ integration:
 /**/halow_capacity_provider:
   ros__parameters:
     interface: wlx0cbf7400343c
-    experimental_mmrc_factor: 0.1
+    experimental_mmrc_factor: 0.2
