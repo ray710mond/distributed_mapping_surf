@@ -41,6 +41,7 @@
 #include "surf_drone/information_debt.hpp"
 #include "surf_multirobot_msgs/msg/allocation_metrics.hpp"
 #include "surf_drone/communication_state.hpp"
+#include "surf_drone/observed_ray.hpp"
 #include "surf_multirobot_comms/qos_profiles.hpp"
 #include "surf_multirobot_comms/voxel_codec.hpp"
 
@@ -145,6 +146,12 @@ public:
       1, declare_parameter<int64_t>("maximum_ray_voxels", 1200)));
     maximum_clear_rays_ = static_cast<int>(std::max<int64_t>(
       1, declare_parameter<int64_t>("maximum_clear_rays", 256)));
+    maximum_ray_work_ = static_cast<std::size_t>(std::max<int64_t>(
+      1, declare_parameter<int64_t>("mapping.maximum_ray_cells_per_scan", 32768)));
+    mapping_radius_ = declare_parameter<double>("mapping.radius_metres", 10.0);
+    if (!std::isfinite(resolution_) || resolution_ <= 0 ||
+      !std::isfinite(mapping_radius_) || mapping_radius_ <= 0)
+      throw std::invalid_argument("mapping resolution and radius must be positive and finite");
     compression_level_ = static_cast<int>(declare_parameter<int64_t>("compression_level", 1));
     maximum_packet_bytes_ = static_cast<std::size_t>(std::max<int64_t>(256,
       declare_parameter<int64_t>("transport.maximum_packet_bytes", 1200)));
@@ -152,6 +159,16 @@ public:
     control_dt_ = declare_parameter<double>("allocation.dt", 0.1);
     schedule_hz_[0] = declare_parameter<double>("scheduling.delta_hz", 10.0);
     schedule_hz_[1] = declare_parameter<double>("scheduling.backlog_hz", 10.0);
+    maximum_control_entries_ = static_cast<std::size_t>(std::max<int64_t>(16,
+      declare_parameter<int64_t>("scheduling.maximum_entries_per_cycle", 4096)));
+    maximum_cluster_entries_ = static_cast<std::size_t>(std::max<int64_t>(16,
+      declare_parameter<int64_t>("scheduling.maximum_cluster_traversal_entries", 8192)));
+    cluster_scheduling_enabled_ = declare_parameter<bool>("scheduling.cluster_enabled", true);
+    cluster_neighbour_radius_ = static_cast<int>(std::clamp<int64_t>(
+      declare_parameter<int64_t>("scheduling.cluster_neighbour_radius_voxels", 2), 1, 4));
+    spatial_change_weight_ = declare_parameter<double>("scheduling.spatial_change_weight", 1.0);
+    if (!std::isfinite(spatial_change_weight_) || spatial_change_weight_ < 0)
+      throw std::invalid_argument("spatial change weight must be finite and nonnegative");
     starvation_fraction_ = declare_parameter<double>("scheduling.starvation_fraction", 0.1);
     starvation_age_seconds_ = declare_parameter<double>("scheduling.starvation_age_seconds", 30.0);
     for (double rate : schedule_hz_) if (!std::isfinite(rate) || rate <= 0)
@@ -166,12 +183,13 @@ public:
       w.age = declare_parameter<double>(prefix + "age", i == 0 ? 1.0 : 2.0);
       w.proximity = declare_parameter<double>(prefix + "proximity", 1.0);
       w.dynamic = declare_parameter<double>(prefix + "dynamic", 1.0);
+      w.occupied = declare_parameter<double>(prefix + "occupied", 2.0);
       w.destructive = declare_parameter<double>(prefix + "destructive", 1.0);
       w.age_seconds = declare_parameter<double>(prefix + "age_seconds", 10.0);
       w.distance_metres = declare_parameter<double>(prefix + "distance_metres", 10.0);
-      if (!std::isfinite(w.base + w.age + w.proximity + w.dynamic + w.destructive +
+      if (!std::isfinite(w.base + w.age + w.proximity + w.dynamic + w.destructive + w.occupied +
         w.age_seconds + w.distance_metres) || w.base <= 0 || w.age < 0 || w.proximity < 0 || w.dynamic < 0 ||
-        w.destructive < 0 || w.age_seconds <= 0 || w.distance_metres <= 0)
+        w.destructive < 0 || w.occupied < 0 || w.age_seconds <= 0 || w.distance_metres <= 0)
         throw std::invalid_argument("invalid priority weights");
     }
     if (!std::isfinite(control_dt_) || control_dt_ <= 0 ||
@@ -260,12 +278,15 @@ public:
       "/" + robot_name_ + "/comm/allocation_metrics", rclcpp::QoS(100));
     realtime_publish_timer_ = create_wall_timer(std::chrono::duration<double>(control_dt_),
       [this]() {control_step();});
+    ack_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions ack_options;
+    ack_options.callback_group = ack_callback_group_;
     realtime_ack_subscription_ = create_subscription<surf_multirobot_msgs::msg::RealtimeAck>(
       realtime_ack_topic_, rclcpp::QoS(10).best_effort().durability_volatile(),
-      std::bind(&DroneScanSender::realtime_ack_callback, this, std::placeholders::_1));
+      std::bind(&DroneScanSender::realtime_ack_callback, this, std::placeholders::_1), ack_options);
     backlog_ack_subscription_ = create_subscription<surf_multirobot_msgs::msg::SyncAck>(
       backlog_ack_topic_, rclcpp::QoS(10).reliable().transient_local(),
-      std::bind(&DroneScanSender::backlog_ack_callback, this, std::placeholders::_1));
+      std::bind(&DroneScanSender::backlog_ack_callback, this, std::placeholders::_1), ack_options);
     backlog_request_subscription_ = create_subscription<surf_multirobot_msgs::msg::SyncRequest>(
       backlog_request_topic_, rclcpp::QoS(10).reliable().transient_local(),
       std::bind(&DroneScanSender::backlog_request_callback, this, std::placeholders::_1));
@@ -340,35 +361,41 @@ public:
 private:
   struct DeliveryAttempt {double sent; int stream; std::vector<Coord> coordinates;};
   std::unordered_map<uint64_t, DeliveryAttempt> attempts_;
-  void delivery_metric(uint64_t version, const DeliveryAttempt & attempt, bool acknowledged) {
+  void delivery_metric(uint64_t version, const DeliveryAttempt & attempt, bool acknowledged, double lock_wait_ms = 0) {
     surf_multirobot_msgs::msg::RealtimeAckMetrics m;
     m.header.stamp = now(); m.map_epoch = map_epoch_; m.version = version;
     m.traffic_class = attempt.stream + 1; m.acknowledged = acknowledged;
     m.timeout_ms = realtime_ack_timeout_seconds_ * 1000;
+    m.ack_lock_wait_ms = lock_wait_ms;
     if (acknowledged) m.update_completion_rtt_ms = m.final_chunk_rtt_ms =
       (steady_seconds() - attempt.sent) * 1000;
     realtime_ack_metrics_publisher_->publish(m);
   }
-  void acknowledge_packet(uint64_t version, int stream) {
+  void acknowledge_packet(uint64_t version, int stream, double lock_wait_ms) {
     auto it = attempts_.find(version);
     if (it == attempts_.end() || it->second.stream != stream) return;
-    debt_.ack(version, it->second.coordinates); delivery_metric(version, it->second, true); attempts_.erase(it);
+    debt_.ack(version, it->second.coordinates); delivery_metric(version, it->second, true, lock_wait_ms); attempts_.erase(it);
   }
   void realtime_ack_callback(const surf_multirobot_msgs::msg::RealtimeAck::SharedPtr ack)
   {
+    const auto received = steady_seconds();
     std::lock_guard<std::mutex> lock(state_mutex_);
-    if (ack->map_epoch == map_epoch_) acknowledge_packet(ack->version, 0);
+    if (ack->map_epoch == map_epoch_) acknowledge_packet(ack->version, 0, (steady_seconds()-received)*1000);
   }
   void backlog_ack_callback(const surf_multirobot_msgs::msg::SyncAck::SharedPtr ack)
   {
+    const auto received = steady_seconds();
     std::lock_guard<std::mutex> lock(state_mutex_);
-    if (ack->source_id == robot_name_ && ack->map_epoch == map_epoch_) acknowledge_packet(ack->version, 1);
+    if (ack->source_id == robot_name_ && ack->map_epoch == map_epoch_)
+      acknowledge_packet(ack->version, 1, (steady_seconds()-received)*1000);
   }
   void backlog_request_callback(const surf_multirobot_msgs::msg::SyncRequest::SharedPtr request)
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
     if ((request->source_id.empty() || request->source_id == robot_name_) &&
-      (request->map_epoch == 0 || request->map_epoch == map_epoch_)) debt_.recover(steady_seconds());
+      (request->map_epoch == 0 || request->map_epoch == map_epoch_)) {
+      debt_.request_recovery();
+    }
   }
 
   void worker_loop()
@@ -430,37 +457,6 @@ private:
     capacity_received_ = steady_seconds();
     link_metrics_ = *metrics;
   }
-
-  void trace_ray_for_clears(
-    const Coord & origin, const Coord & endpoint,
-    const std::unordered_set<Coord, CoordHash> & current,
-    std::unordered_set<Coord, CoordHash> & traversed_known)
-  {
-    const int64_t dx = static_cast<int64_t>(endpoint.x) - origin.x;
-    const int64_t dy = static_cast<int64_t>(endpoint.y) - origin.y;
-    const int64_t dz = static_cast<int64_t>(endpoint.z) - origin.z;
-    const int steps = static_cast<int>(std::min<int64_t>(
-      maximum_ray_voxels_, std::max({std::llabs(dx), std::llabs(dy), std::llabs(dz)})));
-    if (steps <= 1) {
-      return;
-    }
-    Coord previous = origin;
-    for (int step = 1; step < steps; ++step) {
-      const double ratio = static_cast<double>(step) / static_cast<double>(steps);
-      Coord coord{
-        static_cast<int32_t>(std::llround(origin.x + ratio * dx)),
-        static_cast<int32_t>(std::llround(origin.y + ratio * dy)),
-        static_cast<int32_t>(std::llround(origin.z + ratio * dz))};
-      if (coord == previous) {
-        continue;
-      }
-      previous = coord;
-      if (current.find(coord) == current.end() && cells_.find(coord) != cells_.end()) {
-        traversed_known.insert(coord);
-      }
-    }
-  }
-
 
   std::unique_ptr<HumanoidMask> humanoid_mask_at(const builtin_interfaces::msg::Time & stamp)
   {
@@ -528,12 +524,12 @@ private:
       transform.transform.translation.x,
       transform.transform.translation.y,
       transform.transform.translation.z);
-    const Coord origin = quantize(translation.x(), translation.y(), translation.z(), resolution_);
     const std::unique_ptr<HumanoidMask> humanoid_mask = humanoid_mask_at(cloud.header.stamp);
 
     uint32_t raw_points = cloud.width * cloud.height;
     uint32_t valid_points = 0;
     std::unordered_set<Coord, CoordHash> current;
+    std::unordered_map<Coord, tf2::Vector3, CoordHash> endpoints;
     try {
       sensor_msgs::PointCloud2ConstIterator<float> x(cloud, "x");
       sensor_msgs::PointCloud2ConstIterator<float> y(cloud, "y");
@@ -556,7 +552,9 @@ private:
         if (humanoid_mask && humanoid_mask->contains(mapped.x(), mapped.y(), mapped.z())) {
           continue;
         }
-        current.insert(quantize(mapped.x(), mapped.y(), mapped.z(), resolution_));
+        const auto coord = quantize(mapped.x(), mapped.y(), mapped.z(), resolution_);
+        current.insert(coord);
+        endpoints.try_emplace(coord, mapped);
         ++valid_points;
       }
     } catch (const std::runtime_error & exception) {
@@ -615,13 +613,20 @@ private:
       }
     }
 
+    std::size_t occupancy_work = 0;
     for (const auto & coord : current) {
+      // Keep prior-overlap telemetry comparable with the full filtered scan;
+      // the communication horizon controls admission, not this denominator.
+      const bool represented_by_prior = static_snapshot->count(coord) != 0;
+      if (represented_by_prior) ++static_prior_voxels;
+      if ((endpoints.at(coord) - translation).length2() > mapping_radius_ * mapping_radius_) continue;
+      if (++occupancy_work % 256 == 0) {
+        state_lock.unlock();
+        std::this_thread::yield();
+        state_lock.lock();
+      }
       tombstones_.erase(coord);
       auto & cell = cells_[coord];
-      const bool represented_by_prior = static_snapshot->find(coord) != static_snapshot->end();
-      if (represented_by_prior) {
-        ++static_prior_voxels;
-      }
       if (cell.last_seen_version + 1U == version_) {
         ++cell.consecutive_hits;
       } else {
@@ -663,53 +668,64 @@ private:
     // while this expensive local map work finishes; commit its observations below.
     state_lock.unlock();
 
-    std::unordered_set<Coord, CoordHash> traversed_known;
-    const std::size_t maximum_clear_rays = static_cast<std::size_t>(maximum_clear_rays_);
-    const std::size_t ray_stride = std::max<std::size_t>(
-      1U, (current.size() + maximum_clear_rays - 1U) / maximum_clear_rays);
-    const std::size_t ray_offset = static_cast<std::size_t>(version_) % ray_stride;
-    std::size_t ray_index = 0U;
-    std::size_t sampled_rays = 0U;
-    for (const auto & endpoint : current) {
-      if ((ray_index++ % ray_stride) != ray_offset) {
-        continue;
-      }
-      trace_ray_for_clears(origin, endpoint, current, traversed_known);
-      if (++sampled_rays >= maximum_clear_rays) {
-        break;
-      }
+    // Rotate a stable endpoint ordering, so the global work budget does not
+    // repeatedly select the same prefix of an unordered point cloud.
+    std::vector<Coord> ray_endpoints(current.begin(), current.end());
+    std::sort(ray_endpoints.begin(), ray_endpoints.end(), [](const Coord & a, const Coord & b) {
+      return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z);
+    });
+    std::unordered_set<Coord, CoordHash> observed_free;
+    std::size_t ray_work = 0, sampled_rays = 0;
+    while (!ray_endpoints.empty() && sampled_rays < ray_endpoints.size() &&
+      sampled_rays < static_cast<std::size_t>(maximum_clear_rays_) && ray_work < maximum_ray_work_)
+    {
+      const Coord endpoint = ray_endpoints[ray_cursor_++ % ray_endpoints.size()];
+      ++sampled_rays;
+      ray_work += visit_observed_ray(translation, endpoints.at(endpoint), resolution_,
+        std::min(static_cast<std::size_t>(maximum_ray_voxels_), maximum_ray_work_ - ray_work),
+        [&](const Coord & coord) {
+          const tf2::Vector3 center((coord.x+.5)*resolution_, (coord.y+.5)*resolution_, (coord.z+.5)*resolution_);
+          const double distance = (center - translation).length();
+          if (distance > mapping_radius_) return false;
+          // A measured endpoint, including another ray's endpoint, occludes free
+          // evidence behind it. Never clear the peer-owned body or the sensor.
+          if (current.count(coord) || (humanoid_mask && humanoid_mask->contains(coord, resolution_))) return false;
+          if (distance >= std::max(min_range_, self_radius_) && center.z() >= min_z_ && center.z() <= max_z_)
+            observed_free.insert(coord);
+          return true;
+        });
     }
-    for (const auto & coord : traversed_known) {
+    uint32_t free_updates = 0, unknown_updates = 0;
+    for (const auto & coord : observed_free) {
+      const auto previous = tombstones_.find(coord);
+      if (previous != tombstones_.end() && previous->second.state == surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE) continue;
+      // A shared-prior occupied cell also needs the configured miss evidence,
+      // even if this sender has not hit that surface in the current run.
+      if (cells_.find(coord) == cells_.end() && static_snapshot->count(coord))
+        cells_[coord].static_known = true;
       auto found = cells_.find(coord);
-      if (found == cells_.end()) {
-        continue;
+      if (found != cells_.end()) {
+        // Existing occupied evidence requires repeated misses; a previously
+        // unknown cell may become free on its first measured ray traversal.
+        if (++found->second.consecutive_misses < static_cast<uint32_t>(clear_min_misses_)) continue;
+        cells_.erase(found);
+        dynamic_expiry_.cancel(coord);
       }
-      auto & cell = found->second;
-      ++cell.consecutive_misses;
-      if (cell.consecutive_misses < static_cast<uint32_t>(clear_min_misses_)) {
-        continue;
-      }
-      const uint8_t cleared_state = cell.static_known ?
-        surf_multirobot_msgs::msg::VoxelDelta::STATE_DELETE :
-        surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE;
-      tombstones_[coord] = {version_, cleared_state, scan_time_ns};
-      {
-        append_record(realtime, coord, cleared_state, scan_time_ns);
-      }
-      dynamic_expiry_.cancel(coord);
-      cells_.erase(found);
+      const auto old = tombstones_.find(coord);
+      if (old != tombstones_.end() && old->second.state == surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE) continue;
+      tombstones_[coord] = {version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns};
+      append_record(realtime, coord, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns);
+      ++free_updates;
     }
 
-    // Expiry creates explicit free evidence retained until acknowledged.
+    // Lack of a return is not measured free space. Withdraw only this source's
+    // expired dynamic observation; other sources' occupied evidence survives.
     for (const auto & coord : dynamic_expiry_.pop_due(version_)) {
       auto it = cells_.find(coord);
-      if (it == cells_.end() || it->second.static_known) {continue;}
-      tombstones_[coord] = {
-        version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns};
-      {
-        append_record(realtime, coord,
-          surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns);
-      }
+      if (it == cells_.end() || it->second.static_known) continue;
+      tombstones_[coord] = {version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_UNKNOWN, scan_time_ns};
+      append_record(realtime, coord, surf_multirobot_msgs::msg::VoxelDelta::STATE_UNKNOWN, scan_time_ns);
+      ++unknown_updates;
       cells_.erase(it);
     }
     const auto clearing_complete = std::chrono::steady_clock::now();
@@ -727,7 +743,15 @@ private:
         clearing_complete - occupancy_selection_complete).count());
 
     state_lock.lock();
+    // Publish metadata before exposing the first batch of debt to control.
+    last_header_ = realtime.header;
+    last_origin_ = realtime.sensor_origin;
     for (std::size_t i = 0; i < realtime.x.size(); ++i) {
+      if (i && i % 256 == 0) {
+        state_lock.unlock();
+        std::this_thread::yield();
+        state_lock.lock();
+      }
       debt_.observe({realtime.x[i], realtime.y[i], realtime.z[i]}, realtime.state[i],
         realtime.observation_time_ns[i], steady_seconds(),
         information_priority(weights_[0], 0,
@@ -744,6 +768,10 @@ private:
       metrics.input_rate_hz = input_rate_hz_; metrics.stale_input_drops = stale_input_drops_;}
     metrics.raw_serialized_bytes = raw_serialized_bytes; metrics.raw_points = raw_points;
     metrics.valid_points = valid_points; metrics.unique_voxels = current.size();
+    metrics.free_updates = free_updates;
+    metrics.unknown_updates = unknown_updates;
+    metrics.ray_cells_visited = ray_work;
+    metrics.sampled_rays = sampled_rays;
     metrics.static_prior_voxels = static_prior_voxels; metrics.raw_data_bytes = cloud.data.size();
     metrics.point_step_bytes = cloud.point_step; metrics.queue_wait_ms = queue_wait_ms;
     metrics.transform_lookup_ms = transform_lookup_ms; metrics.point_preprocessing_ms = point_preprocessing_ms;
@@ -828,7 +856,9 @@ private:
     const double elapsed = std::min(actual_dt, control_dt_ * 2);
     for (auto it = attempts_.begin(); it != attempts_.end();) {
       if (start - it->second.sent >= realtime_ack_timeout_seconds_) {
-        delivery_metric(it->first, it->second, false); it = attempts_.erase(it);
+        delivery_metric(it->first, it->second, false);
+        debt_.timeout_packet(it->first, it->second.coordinates);
+        it = attempts_.erase(it);
       } else ++it;
     }
     tf2::Vector3 peer(0, 0, 0);
@@ -844,9 +874,10 @@ private:
       }
     }
     const double debt_cycle_start = steady_seconds();
-    auto debt_cycle = debt_.cycle(
+    const auto recovered = debt_.recovery_slice(start, maximum_control_entries_ / 4);
+    auto debt_cycle = debt_.bounded_cycle(
       start, now().seconds(), defer_seconds_, realtime_ack_timeout_seconds_,
-      weights_, peer, resolution_, peer_valid);
+      weights_, peer, resolution_, peer_valid, maximum_control_entries_ - recovered);
     const double debt_cycle_ms = (steady_seconds() - debt_cycle_start) * 1000;
     const auto & x = debt_cycle.debt;
     double capacity = fallback_capacity_;
@@ -858,7 +889,15 @@ private:
     }
     if (!std::isfinite(capacity) || capacity < 0) capacity = 0;
     const double controller_start = steady_seconds();
-    auto allocation = allocator_.allocate({x[0], x[1]}, capacity);
+    const auto feedback = allocator_.allocate({x[0], x[1]}, capacity);
+    auto serviceable_request = feedback.requested;
+    for (int stream=0; stream<2; ++stream) {
+      if (debt_cycle.candidates[stream].empty()) serviceable_request[stream] = 0;
+    }
+    // A class with no eligible records cannot spend its allocation. Project
+    // with that actuator disabled instead of stranding capacity behind ACKs
+    // or behind unvisited entries in the bounded scoring queue.
+    auto allocation = allocator_.project(serviceable_request, capacity);
     const double controller_ms = (steady_seconds() - controller_start)*1000;
     if (capacity == 0) {credits_ = {}; shared_credit_ = 0;}
     shared_credit_ = std::min(std::max(double(maximum_packet_bytes_), capacity * control_dt_ * 2),
@@ -899,21 +938,46 @@ private:
     std::array<double, 2> selected_age_total{};
     for (int stream = 0; stream < 2; ++stream) {
       m.mean_priority_remaining[stream] = m.pending_count[stream] ? x[stream]/m.pending_count[stream] : 0;
-      m.requested_rate[stream] = allocation.requested[stream];
+      m.requested_rate[stream] = feedback.requested[stream];
+      m.serviceable_requested_rate[stream] = allocation.requested[stream];
+      m.eligible_candidate_count[stream] = debt_cycle.candidates[stream].size();
       m.allocated_rate[stream] = allocation.allocated[stream];
       m.target_bytes[stream] = allocation.allocated[stream] * control_dt_;
       credits_[stream] = std::min(std::max(double(maximum_packet_bytes_),
         allocation.allocated[stream] * control_dt_ * 2),
         credits_[stream] + allocation.allocated[stream] * elapsed);
       if (m.pending_count[stream] == 0) {credits_[stream] = 0; continue;}
-      if (start - last_scheduled_[stream] < 1.0 / schedule_hz_[stream]) continue;
+      // Wall timers commonly fire a fraction early. Without tolerance, a 5 Hz
+      // stream on a 5 Hz controller skips every other opportunity and halves
+      // useful throughput. Half a controller tick cannot create an extra
+      // scheduling opportunity between controller callbacks.
+      if (start - last_scheduled_[stream] + control_dt_ * .5 < 1.0 / schedule_hz_[stream]) continue;
       last_scheduled_[stream] = start;
       const double ordering_start = steady_seconds();
       const auto reserve = static_cast<std::size_t>(std::ceil(
         maximum_packet_bytes_ * 0.25 * starvation_fraction_));
+      debt_.score_spatial_change(debt_cycle.candidates[stream],
+        cluster_scheduling_enabled_ ? spatial_change_weight_ : 0.0, cluster_neighbour_radius_);
       auto candidates = InformationDebt::rank_candidates(
-        std::move(debt_cycle.candidates[stream]), maximum_packet_bytes_ * 2,
+        std::move(debt_cycle.candidates[stream]), maximum_control_entries_,
         start, starvation_age_seconds_, reserve);
+      InformationDebt::ClusterSelection cluster;
+      if (stream == 1 && cluster_scheduling_enabled_ && !candidates.empty()) {
+        cluster = debt_.connected_candidates(
+          stream, candidates, maximum_packet_bytes_ * 2, maximum_cluster_entries_,
+          cluster_neighbour_radius_);
+        // BACKLOG grows connected components from the spatially ranked seeds.
+        // DELTA uses per-voxel spatial priority without waiting for completion.
+        candidates = std::move(cluster.entries);
+        m.focus_cluster_valid = cluster.valid;
+        m.focus_cluster_seed = {cluster.seed.x, cluster.seed.y, cluster.seed.z};
+        m.focus_cluster_visited = cluster.visited;
+        m.focus_cluster_candidates = cluster.pending;
+        m.selected_cluster_count = cluster.components;
+        m.focus_cluster_truncated = cluster.truncated;
+        m.completed_cluster_deliveries = cluster.completed;
+      }
+      if (candidates.size() > maximum_packet_bytes_ * 2) candidates.resize(maximum_packet_bytes_ * 2);
       m.selection_ms[stream] = (steady_seconds()-ordering_start)*1000;
       m.priority_ms += m.selection_ms[stream];
       if (candidates.empty()) continue;
@@ -961,7 +1025,7 @@ private:
         attempt.sent = sent_at; attempt.stream = stream; attempt.coordinates.reserve(count);
         for (std::size_t j = 0; j < count; ++j) {
           auto * candidate = candidates[offset+j];
-          candidate->packet = packet_version_; candidate->sent = sent_at;
+          debt_.mark_sent(*candidate, packet_version_, sent_at);
           attempt.coordinates.push_back(candidate->coord);
           m.sent_priority[stream] += candidate->priority;
           m.max_priority_sent[stream] = std::max(m.max_priority_sent[stream], candidate->priority);
@@ -970,6 +1034,8 @@ private:
           m.max_selected_pending_age_s[stream] = std::max(
             m.max_selected_pending_age_s[stream], pending_age);
           if (pending_age >= starvation_age_seconds_) ++m.old_pending_selected_count[stream];
+          if (candidate->state == surf_multirobot_msgs::msg::VoxelDelta::STATE_UNKNOWN)
+            ++m.selected_unknown_count[stream];
           if (candidate->state >= 1 && candidate->state <= 4) {
             ++m.selected_state_count[stream * 4 + candidate->state - 1];
           }
@@ -988,6 +1054,17 @@ private:
           selected_age_total[stream] / m.selected_count[stream];
       }
     }
+    m.scored_entries = debt_cycle.scored_entries;
+    m.sampled_age_metrics = debt_cycle.sampled_metrics;
+    m.recovery_entries_processed = recovered;
+    m.recovery_entries_remaining = debt_.recovery_remaining();
+    const auto region = debt_.region_progress();
+    m.focus_region_valid = region.valid;
+    m.focus_region = {region.coord.x, region.coord.y, region.coord.z};
+    m.focus_region_revision = region.revision;
+    m.focus_region_known = region.known;
+    m.focus_region_pending = region.pending;
+    m.completed_region_deliveries = region.completed;
     m.computation_ms = (steady_seconds() - start) * 1000;
     allocation_publisher_->publish(m);
   }
@@ -1012,6 +1089,12 @@ private:
   double pose_max_age_ms_{50.0};
   double transform_timeout_ms_{500.0};
   double resolution_{0.05};
+  double mapping_radius_{10.0};
+  std::size_t maximum_ray_work_{32768}, ray_cursor_{0}, maximum_control_entries_{4096};
+  std::size_t maximum_cluster_entries_{8192};
+  int cluster_neighbour_radius_{2};
+  bool cluster_scheduling_enabled_{true};
+  double spatial_change_weight_{1.0};
   double min_range_{0.75};
   double max_range_{50.0};
   double min_z_{0.25};
@@ -1105,6 +1188,7 @@ private:
   rclcpp::Publisher<surf_multirobot_msgs::msg::PipelineMetrics>::SharedPtr metrics_publisher_;
   rclcpp::Publisher<surf_multirobot_msgs::msg::RealtimeAckMetrics>::SharedPtr
     realtime_ack_metrics_publisher_;
+  rclcpp::CallbackGroup::SharedPtr ack_callback_group_;
   rclcpp::TimerBase::SharedPtr realtime_publish_timer_;
 };
 
@@ -1114,7 +1198,10 @@ private:
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<surf_drone::DroneScanSender>());
+  auto sender = std::make_shared<surf_drone::DroneScanSender>();
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+  executor.add_node(sender);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }

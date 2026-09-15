@@ -311,7 +311,9 @@ class DataTracker(Node):
             'point_preprocessing_ms': m.point_preprocessing_ms,
             'occupancy_selection_ms': m.occupancy_selection_ms,
             'clearing_ms': m.clearing_ms, 'processing_ms': m.processing_latency_ms,
-            'stale_input_drops': m.stale_input_drops}
+            'stale_input_drops': m.stale_input_drops,
+            'free_updates': m.free_updates, 'unknown_updates': m.unknown_updates,
+            'ray_cells_visited': m.ray_cells_visited, 'sampled_rays': m.sampled_rays}
         if m.traffic_class == 0:
             # Input processing is separate from later control-step transmission.
             # Unpopulated ROS numeric defaults are not measured zero-byte encodings.
@@ -359,6 +361,7 @@ class DataTracker(Node):
             'estimated_one_way_ms': (
                 m.final_chunk_rtt_ms / 2.0 if m.acknowledged else None),
             'timeout_ms': m.timeout_ms,
+            'ack_lock_wait_ms': m.ack_lock_wait_ms if m.acknowledged else None,
         }
         state = 'acknowledged' if m.acknowledged else 'timeout'
         self._record('latency', 'pointcloud_communication',

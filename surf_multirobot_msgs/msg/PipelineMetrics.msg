@@ -38,3 +38,8 @@ float32 processing_latency_ms
 uint64 cumulative_raw_bytes
 uint64 cumulative_wire_bytes
 uint64 stale_input_drops
+
+# Explicit scan evidence and bounded ray work (not transport delivery counts).
+uint32 unknown_updates
+uint32 ray_cells_visited
+uint32 sampled_rays

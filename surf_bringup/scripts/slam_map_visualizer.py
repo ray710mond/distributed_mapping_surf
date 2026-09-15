@@ -92,7 +92,8 @@ class SlamMapVisualizer(Node):
                     VoxelDelta.STATE_OCCUPIED_STATIC,
                     VoxelDelta.STATE_OCCUPIED_DYNAMIC):
                 self.voxels[key] = resolution
-            elif state in (VoxelDelta.STATE_FREE, VoxelDelta.STATE_DELETE):
+            elif state in (VoxelDelta.STATE_FREE, VoxelDelta.STATE_DELETE,
+                           VoxelDelta.STATE_UNKNOWN):
                 self.voxels.pop(key, None)
         self.version = max(self.version, message.version)
         self._publish_voxels(message.header.stamp)

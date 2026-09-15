@@ -113,3 +113,32 @@ TEST(CommunicationState, RotatedMaskQueryMatchesOriginalFullScan)
     EXPECT_EQ(actual, expected);
   }
 }
+
+#include "surf_drone/observed_ray.hpp"
+
+TEST(ObservedRay, UnknownPrefixIsContiguousAndEndpointIsNotFree)
+{
+  std::vector<Coord> free;
+  surf_drone::visit_observed_ray({.5,.5,.5}, {8.5,.5,.5}, 1, 100,
+    [&](Coord c) {free.push_back(c); return true;});
+  ASSERT_EQ(free.size(), 8U);
+  for (int i=0; i<8; ++i) EXPECT_EQ(free[i], (Coord{i,0,0}));
+  free.clear();
+  surf_drone::visit_observed_ray({.5,.5,.5}, {100.5,.5,.5}, 1, 3,
+    [&](Coord c) {free.push_back(c); return true;});
+  EXPECT_EQ(free, (std::vector<Coord>{{0,0,0},{1,0,0},{2,0,0}}));
+}
+
+TEST(ObservedRay, NegativeCoordinatesCornersAndOcclusion)
+{
+  std::vector<Coord> free;
+  surf_drone::visit_observed_ray({.5,.5,.5}, {-3.5,-3.5,-3.5}, 1, 100,
+    [&](Coord c) {free.push_back(c); return true;});
+  EXPECT_EQ(free, (std::vector<Coord>{{0,0,0},{-1,-1,-1},{-2,-2,-2},{-3,-3,-3}}));
+  free.clear();
+  surf_drone::visit_observed_ray({.5,.5,.5}, {8.5,.5,.5}, 1, 100,
+    [&](Coord c) {if (c.x == 3) return false; free.push_back(c); return true;});
+  EXPECT_EQ(free, (std::vector<Coord>{{0,0,0},{1,0,0},{2,0,0}}));
+  EXPECT_EQ(surf_drone::visit_observed_ray({.1,.1,.1}, {.9,.9,.9}, 1, 100,
+    [&](Coord) {ADD_FAILURE(); return true;}), 0U);
+}

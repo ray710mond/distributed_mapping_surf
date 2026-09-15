@@ -123,11 +123,15 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
       rclcpp::Parameter("maximum_clear_rays", int64_t(1)),
+      // This fixture deliberately constructs 60k points over a larger region.
+      rclcpp::Parameter("mapping.radius_metres", 50.),
       rclcpp::Parameter("allocation.dt", .2),
       rclcpp::Parameter("scheduling.delta_hz", 5.),
       rclcpp::Parameter("scheduling.backlog_hz", 5.),
       rclcpp::Parameter("scheduling.starvation_age_seconds", 0.),
       rclcpp::Parameter("scheduling.starvation_fraction", .1),
+      // Isolate shared/class byte credits from the connectivity policy.
+      rclcpp::Parameter("scheduling.cluster_enabled", false),
       // This no-ACK throughput fixture keeps debt in BACKLOG. A long DELTA
       // window leaves high-gain in-flight DELTA consuming requested allocation.
       rclcpp::Parameter("delivery.defer_seconds", .1),
@@ -160,7 +164,7 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
     sensor_msgs::PointCloud2Iterator<float> x(cloud,"x"),y(cloud,"y"),z(cloud,"z");
     for(int i=0;i<60000;++i,++x,++y,++z) {*x=2+(i%200)*.06F;*y=(i/200%100)*.06F;*z=1+(i/20000)*.06F;}
     pub->publish(cloud);spin(3.5);
-    double shared=0,total=0,active_time=0; std::array<double,2> credits{};
+    double shared=0,total=0,active_time=0; std::array<double,2> credits{}, stream_total{};
     bool multiple=false; uint64_t peak=0;
     bool observed_age_metrics=false;
     for(const auto & m:metrics) {
@@ -171,6 +175,7 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
         if(!m.pending_count[i]) credits[i]=0;
         EXPECT_LE(m.wire_bytes[i],std::min(shared,credits[i])+1e-6);
         credits[i]-=m.wire_bytes[i];shared-=m.wire_bytes[i];total+=m.wire_bytes[i];
+        stream_total[i]+=m.wire_bytes[i];
         multiple=multiple || m.wire_bytes[i]>1200;
       }
       peak=std::max(peak,m.pending_count[0]+m.pending_count[1]);
@@ -185,9 +190,68 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
     EXPECT_TRUE(multiple);
     EXPECT_TRUE(observed_age_metrics);
     RecordProperty("offered_bytes_per_second", total / active_time);
+    RecordProperty("delta_bytes", stream_total[0]);
+    RecordProperty("backlog_bytes", stream_total[1]);
     RecordProperty("peak_pending_voxels", static_cast<int>(peak));
     EXPECT_GT(total,active_time*10000*.75);
-    EXPECT_EQ(packet_bytes,static_cast<std::size_t>(total));
+    // Metrics and packets use independent ROS topics, so shutdown can observe
+    // either side of the final publication first. They must agree within one
+    // bounded packet rather than requiring cross-topic delivery ordering.
+    EXPECT_NEAR(static_cast<double>(packet_bytes),total,1200.);
+    exec.remove_node(sender);exec.remove_node(probe);
+  }
+  rclcpp::shutdown();
+}
+
+TEST(InformationDelivery, NewFreeSpaceAndExpiryHaveDifferentEvidence)
+{
+  rclcpp::init(0, nullptr);
+  {
+    using Delta=surf_multirobot_msgs::msg::VoxelDelta;
+    using Packet=surf_multirobot_msgs::msg::CompressedVoxelDelta;
+    auto sender=std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
+      rclcpp::Parameter("filters.humanoid_mask.enabled",false),
+      rclcpp::Parameter("dynamic_retention_scans",int64_t(1))}));
+    auto probe=std::make_shared<rclcpp::Node>("free_evidence_probe");
+    auto pub=probe->create_publisher<sensor_msgs::msg::PointCloud2>("/drone/points",rclcpp::SensorDataQoS());
+    auto da=probe->create_publisher<surf_multirobot_msgs::msg::RealtimeAck>("/drone/transport/realtime_ack",10);
+    auto ba=probe->create_publisher<surf_multirobot_msgs::msg::SyncAck>("/drone/transport/sync_ack",rclcpp::QoS(10).reliable().transient_local());
+    bool new_free=false, endpoint_occupied=false, endpoint_unknown=false, endpoint_free=false;
+    auto receive=[&](const Packet & p) {
+      Delta d; ASSERT_TRUE(surf::comms::decode_delta(p,d,1024*1024).ok);
+      for(std::size_t i=0;i<d.x.size();++i) {
+        if(d.x[i]==20 && d.y[i]==0 && d.z[i]==10 && d.state[i]==Delta::STATE_FREE) new_free=true;
+        if(d.x[i]==40 && d.y[i]==0 && d.z[i]==20) {
+          endpoint_occupied |= d.state[i]==Delta::STATE_OCCUPIED_DYNAMIC;
+          endpoint_unknown |= d.state[i]==Delta::STATE_UNKNOWN;
+          endpoint_free |= d.state[i]==Delta::STATE_FREE || d.state[i]==Delta::STATE_DELETE;
+        }
+      }
+      if(p.traffic_class==1) {
+        surf_multirobot_msgs::msg::RealtimeAck a;a.map_epoch=p.map_epoch;a.version=p.version;da->publish(a);
+      } else {
+        surf_multirobot_msgs::msg::SyncAck a;a.source_id="drone";a.map_epoch=p.map_epoch;a.version=p.version;ba->publish(a);
+      }
+    };
+    auto ds=probe->create_subscription<Packet>("/drone/transport/realtime_tx",surf::comms::realtime_qos(),receive);
+    auto bs=probe->create_subscription<Packet>("/drone/transport/sync_tx",surf::comms::sync_qos(),receive);
+    rclcpp::executors::SingleThreadedExecutor exec;exec.add_node(sender);exec.add_node(probe);
+    auto spin=[&](double seconds) {
+      auto until=std::chrono::steady_clock::now()+std::chrono::duration<double>(seconds);
+      while(std::chrono::steady_clock::now()<until) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+    };
+    auto scan=[&](bool has_endpoint) {
+      sensor_msgs::msg::PointCloud2 c;c.header.frame_id="map";c.header.stamp=probe->now();
+      sensor_msgs::PointCloud2Modifier mod(c);mod.setPointCloud2FieldsByString(1,"xyz");mod.resize(has_endpoint ? 1 : 0);
+      if(has_endpoint) {
+        sensor_msgs::PointCloud2Iterator<float> x(c,"x"),y(c,"y"),z(c,"z");*x=2;*y=0;*z=1;
+      }
+      pub->publish(c);
+    };
+    spin(.3);scan(true);spin(1);
+    EXPECT_TRUE(new_free);EXPECT_TRUE(endpoint_occupied);EXPECT_FALSE(endpoint_free);
+    scan(false);spin(.2);scan(false);spin(1.5);
+    EXPECT_TRUE(endpoint_unknown);EXPECT_FALSE(endpoint_free);
     exec.remove_node(sender);exec.remove_node(probe);
   }
   rclcpp::shutdown();

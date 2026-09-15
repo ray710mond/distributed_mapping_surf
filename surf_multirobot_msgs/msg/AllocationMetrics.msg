@@ -74,3 +74,37 @@ float64 max_ack_observation_lag_s
 uint64 ack_lag_samples
 uint64 stale_pending_discarded
 string[2] codec
+
+# Bounded scheduler: debt and pending/in-flight counts are global; age buckets,
+# age extrema, ACK-lag sample counts and priority maxima describe this sample.
+uint64 scored_entries
+bool sampled_age_metrics
+uint64 recovery_entries_processed
+uint64 recovery_entries_remaining
+uint64[2] selected_unknown_count
+# Block keys are floor(voxel coordinate / 16). Delivery completion means all
+# currently known records in a block were ACKed, NOT all block cells observed,
+# nor that downstream map integration/planner validation has completed.
+bool focus_region_valid
+int32[3] focus_region
+uint64 focus_region_revision
+uint64 focus_region_known
+uint64 focus_region_pending
+uint64 completed_region_deliveries
+
+# Raw LQR requested_rate is retained above. Before capacity projection, streams
+# without eligible sampled candidates have their serviceable request set to zero.
+float64[2] serviceable_requested_rate
+uint64[2] eligible_candidate_count
+
+# BACKLOG records are ordered by proximity-graph component; a packet may combine
+# small component groups to use its byte budget. UNKNOWN records break
+# connectivity. Completion means no eligible record was
+# found within the bounded traversal; it is a scheduler event, not map coverage.
+bool focus_cluster_valid
+int32[3] focus_cluster_seed
+uint64 focus_cluster_visited
+uint64 focus_cluster_candidates
+uint64 selected_cluster_count
+bool focus_cluster_truncated
+uint64 completed_cluster_deliveries

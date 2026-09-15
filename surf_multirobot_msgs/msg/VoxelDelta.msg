@@ -10,7 +10,10 @@ uint8 MODE_INFORMATION=4
 uint8 STATE_OCCUPIED_STATIC=1
 uint8 STATE_OCCUPIED_DYNAMIC=2
 uint8 STATE_FREE=3
+# Legacy scan-observed clearing of a static cell (also free evidence).
 uint8 STATE_DELETE=4
+# Withdraw this source's observation; no free-space evidence. Used for expiry.
+uint8 STATE_UNKNOWN=5
 
 std_msgs/Header header
 string source_id

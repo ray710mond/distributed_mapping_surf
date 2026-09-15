@@ -22,6 +22,11 @@
       max_age_ms: 50.0
       tf_timeout_ms: 500.0
     resolution: 0.05
+    mapping:
+      # Observed local region around the current sensor. Keep fine resolution;
+      # do not expand a single free ray into a wholly free coarse voxel.
+      radius_metres: 10.0
+      maximum_ray_cells_per_scan: 32768
     compression_level: 1
     transport:
       maximum_packet_bytes: 1200
@@ -79,6 +84,14 @@
       development_bytes_per_second: 10000.0
       telemetry_timeout_seconds: 3.0
     scheduling:
+      cluster_enabled: true
+      # Per-voxel bonus = weight * log(1 + unsent changed neighbors).
+      spatial_change_weight: 1.0
+      maximum_entries_per_cycle: 4096
+      # Bound proximity-connected BACKLOG traversal independently of debt scoring.
+      maximum_cluster_traversal_entries: 8192
+      # 2 voxels = 10 cm at 5 cm resolution; groups sparse quantized samples.
+      cluster_neighbour_radius_voxels: 2
       delta_hz: 10.0
       backlog_hz: 10.0
       starvation_fraction: 0.1
@@ -88,6 +101,8 @@
         base: 1.0
         age: 1.0
         proximity: 1.0
+        # Obstacle evidence precedes the much larger new-free-space volume.
+        occupied: 2.0
         dynamic: 1.0
         destructive: 1.0
         age_seconds: 10.0
@@ -96,6 +111,8 @@
         base: 1.0
         age: 2.0
         proximity: 1.0
+        # Obstacle evidence precedes the much larger new-free-space volume.
+        occupied: 2.0
         dynamic: 1.0
         destructive: 1.0
         age_seconds: 10.0

@@ -19,15 +19,16 @@ TEST(VoxelCodec, RoundTripsEveryOperationAndSortsDeterministically)
   input.chunk_index = 2U;
   input.chunk_count = 4U;
   input.resolution = 0.2F;
-  input.x = {100, -3, 0, 100};
-  input.y = {-200, 4, 0, -200};
-  input.z = {5, -6, 0, 5};
+  input.x = {100, -3, 0, 100, 7};
+  input.y = {-200, 4, 0, -200, 8};
+  input.z = {5, -6, 0, 5, 9};
   input.state = {
     surf_multirobot_msgs::msg::VoxelDelta::STATE_OCCUPIED_STATIC,
     surf_multirobot_msgs::msg::VoxelDelta::STATE_OCCUPIED_DYNAMIC,
     surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE,
-    surf_multirobot_msgs::msg::VoxelDelta::STATE_DELETE};
-  input.observation_time_ns = {1000000000U, 2000000000U, 3000000000U, 4000000000U};
+    surf_multirobot_msgs::msg::VoxelDelta::STATE_DELETE,
+    surf_multirobot_msgs::msg::VoxelDelta::STATE_UNKNOWN};
+  input.observation_time_ns = {1000000000U, 2000000000U, 3000000000U, 4000000000U, 5000000000ULL};
 
   surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
   const auto encoded = surf::comms::encode_delta(input, wire, 1);
@@ -46,6 +47,7 @@ TEST(VoxelCodec, RoundTripsEveryOperationAndSortsDeterministically)
   EXPECT_EQ(output.map_epoch, input.map_epoch);
   EXPECT_EQ(output.version, input.version);
   ASSERT_EQ(output.x.size(), input.x.size());
+  EXPECT_NE(std::find(output.state.begin(), output.state.end(), input.STATE_UNKNOWN), output.state.end());
   EXPECT_EQ(output.observation_time_ns.size(), input.observation_time_ns.size());
   EXPECT_TRUE(std::is_permutation(
     output.observation_time_ns.begin(), output.observation_time_ns.end(),
