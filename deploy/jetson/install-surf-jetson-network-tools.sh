@@ -57,6 +57,7 @@ install -m 0755 \
     "$project_dir/../../surf_data_tracker/surf_data_tracker/clock.py" \
     /usr/local/bin/clock-sync-status
 install -m 0755 "$project_dir/../network/surf-preflight" /usr/local/bin/surf-preflight
+install -m 0755 "$project_dir/../clock-sync/sync_clocks" /usr/local/bin/sync_clocks
 
 "$project_dir/../clock-sync/install-surf-clock-sync.sh" "$SURF_JETSON_HALOW_PEER"
 
@@ -71,3 +72,4 @@ echo "  sudo surf-jetson-internet-mode"
 echo "  sudo surf-jetson-test-mode"
 echo "  clock-sync-status"
 echo "  surf-preflight"
+echo "  sync_clocks"

@@ -72,6 +72,7 @@ install -m 0755 \
     "$project_dir/../../surf_data_tracker/surf_data_tracker/clock.py" \
     /usr/local/bin/clock-sync-status
 install -m 0755 "$project_dir/../network/surf-preflight" /usr/local/bin/surf-preflight
+install -m 0755 "$project_dir/../clock-sync/sync_clocks" /usr/local/bin/sync_clocks
 
 "$project_dir/../clock-sync/install-surf-clock-sync.sh" "$SURF_HALOW_PEER"
 nmcli connection modify "$SURF_NORMAL_WIFI_PROFILE" \
@@ -86,3 +87,4 @@ nmcli connection modify "$SURF_NORMAL_WIFI_PROFILE" \
 /usr/local/sbin/surf-normal-mode
 echo "Installed HaLow peer networking and internet Wi-Fi tools."
 echo "Use surf-test-mode to check clock readiness without changing Wi-Fi."
+echo "Run sync_clocks before starting an experiment."
