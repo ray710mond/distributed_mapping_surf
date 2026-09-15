@@ -75,4 +75,4 @@ integration:
   ros__parameters:
     interface: wlx0cbf7400343c
     experimental_mmrc_factor: 0.0
-    development_bytes_per_second: 10000.0
+    development_bytes_per_second: 10000000.0

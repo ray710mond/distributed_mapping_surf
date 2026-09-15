@@ -1,5 +1,6 @@
 #pragma once
 #include "surf_drone/communication_state.hpp"
+#include "geometry_msgs/msg/point.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -61,6 +62,8 @@ public:
     double created{0}, sent{0}, priority{1};
     uint64_t acknowledged_stamp{0};
     double spatial_bonus{0}; // Selection only; does not alter conserved information debt.
+    uint8_t ray_flag{0};
+    geometry_msgs::msg::Point ray_origin, ray_endpoint;
   };
   struct CycleSnapshot {
     std::array<double, 2> debt{};
@@ -249,7 +252,9 @@ public:
   }
   std::array<double, 2> generated{}, acknowledged{}, superseded{}, reclassified{}, disturbance{}, timed_out{}, excluded{};
   uint64_t superseded_count{0}, stale_observations{0}, stale_pending_discarded{0};
-  bool observe(Coord c, uint8_t state, uint64_t stamp, double now, double initial_priority = 1.0) {
+  bool observe(Coord c, uint8_t state, uint64_t stamp, double now, double initial_priority = 1.0,
+    uint8_t ray_flag = 0, geometry_msgs::msg::Point ray_origin = geometry_msgs::msg::Point(),
+    geometry_msgs::msg::Point ray_endpoint = geometry_msgs::msg::Point()) {
     auto it = entries.find(c);
     const uint64_t known_stamp = it == entries.end() ? 0 : it->second.acknowledged_stamp;
     if (it != entries.end()) {
@@ -265,7 +270,11 @@ public:
       }
     }
     const bool new_coordinate = it == entries.end();
-    entries[c] = {c, state, stamp, true, 0, 0, now, 0, initial_priority, known_stamp};
+    entries[c] = {c, state, stamp, true, 0, 0, now, 0, initial_priority, known_stamp,
+      0, ray_flag, ray_origin, ray_endpoint};
+    entries[c].ray_flag = ray_flag;
+    entries[c].ray_origin = ray_origin;
+    entries[c].ray_endpoint = ray_endpoint;
     ++pending_counts_[0]; add_pending(c, new_coordinate);
     generated[0] += initial_priority; disturbance[0] += initial_priority; return true;
   }

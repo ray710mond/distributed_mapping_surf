@@ -104,7 +104,10 @@ age-reserved updates can displace an earlier focus. Component
 selection does not assert traversability: occupied voxels are included as boundary
 evidence, and no robot clearance or ground-support model exists yet. DELTA keeps
 per-voxel spatial priority order so a new obstacle is not delayed behind regional completion.
-The deployment profile enables this with `scheduling.cluster_enabled=true`.
+The original deployment profile enabled this with `scheduling.cluster_enabled=true`;
+the compact-free-ray hardware profile disables it because its sampled sender
+records no longer represent contiguous voxel coverage. Receiver ray expansion
+provides contiguous measured prefixes instead.
 Per-voxel observation timestamps, supersession and packet ACKs remain authoritative;
 no new atomic snapshot/manifest protocol is introduced.
 

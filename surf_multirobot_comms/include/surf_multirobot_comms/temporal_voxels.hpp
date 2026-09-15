@@ -26,6 +26,7 @@ public:
     Delta valid = delta;
     valid.x.clear(); valid.y.clear(); valid.z.clear(); valid.state.clear();
     valid.observation_time_ns.clear();
+    valid.ray_flags.clear(); valid.ray_origins.clear(); valid.ray_endpoints.clear();
     for (std::size_t i = 0; i < delta.x.size(); ++i) {
       const std::array<int32_t, 3> c{delta.x[i], delta.y[i], delta.z[i]};
       const auto stamp = delta.observation_time_ns[i];
@@ -42,6 +43,7 @@ public:
   Delta snapshot(const Delta & metadata) const {
     Delta out = metadata;
     out.x.clear(); out.y.clear(); out.z.clear(); out.state.clear(); out.observation_time_ns.clear();
+    out.ray_flags.clear(); out.ray_origins.clear(); out.ray_endpoints.clear();
     for (const auto & [c, stamp] : newest_) {
       out.x.push_back(c[0]); out.y.push_back(c[1]); out.z.push_back(c[2]);
       out.state.push_back(states_.at(c)); out.observation_time_ns.push_back(stamp);

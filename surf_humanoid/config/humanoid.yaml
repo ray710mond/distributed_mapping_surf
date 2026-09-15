@@ -1,5 +1,13 @@
 /**/drone_data_receiver:
   ros__parameters:
+    free_ray:
+      resolution: 0.05
+      min_range: 0.75
+      self_radius: 0.7
+      min_z: 0.25
+      max_z: 20.0
+      radius_metres: 100.0
+      maximum_voxels: 1200
     use_sim_time: false
     robot_name: humanoid
     realtime_topic: /humanoid/transport/realtime_tx

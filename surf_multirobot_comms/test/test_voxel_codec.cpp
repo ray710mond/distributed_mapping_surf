@@ -71,6 +71,9 @@ TEST(VoxelCodec, RejectsMismatchedArraysAndCorruption)
   valid.z = {3};
   valid.state = {surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE};
   valid.observation_time_ns = {123U};
+  valid.ray_flags = {1};
+  EXPECT_FALSE(surf::comms::encode_delta(valid, wire).ok);
+  valid.ray_flags.clear();
   ASSERT_TRUE(surf::comms::encode_delta(valid, wire).ok);
   wire.payload.at(0) ^= 0x5aU;
   surf_multirobot_msgs::msg::VoxelDelta output;
@@ -98,6 +101,52 @@ TEST(VoxelCodec, UsesZstdWhenItReducesPayloadSize)
   const auto decoded = surf::comms::decode_delta(wire, output);
   ASSERT_TRUE(decoded.ok) << decoded.error;
   EXPECT_EQ(output.x.size(), input.x.size());
+}
+
+TEST(VoxelCodec, RetainsPerRecordMeasuredRayAcrossBacklogEncoding)
+{
+  surf_multirobot_msgs::msg::VoxelDelta input;
+  input.header.frame_id = "map"; input.chunk_count = 1; input.resolution = .05;
+  input.x = {20, 40}; input.y = {0, 0}; input.z = {20, 20};
+  input.state = {input.STATE_FREE, input.STATE_OCCUPIED_DYNAMIC};
+  input.observation_time_ns = {123, 456};
+  geometry_msgs::msg::Point origin, endpoint;
+  origin.x=.025;origin.y=.025;origin.z=1.025;
+  endpoint.x=2.025;endpoint.y=.025;endpoint.z=1.025;
+  input.ray_flags={1,0};
+  input.ray_origins={origin,geometry_msgs::msg::Point()};
+  input.ray_endpoints={endpoint,geometry_msgs::msg::Point()};
+  surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
+  ASSERT_TRUE(surf::comms::encode_delta(input,wire).ok);
+  EXPECT_TRUE(wire.codec=="raw-svd3" || wire.codec=="zstd-svd3");
+  surf_multirobot_msgs::msg::VoxelDelta output;
+  ASSERT_TRUE(surf::comms::decode_delta(wire,output).ok);
+  ASSERT_EQ(output.ray_flags.size(),2U);
+  EXPECT_EQ(output.ray_flags[0],1);
+  EXPECT_DOUBLE_EQ(output.ray_origins[0].x,origin.x);
+  EXPECT_DOUBLE_EQ(output.ray_endpoints[0].x,endpoint.x);
+  EXPECT_EQ(output.ray_flags[1],0);
+}
+
+TEST(VoxelCodec, RetainsOccupiedScanOriginWithoutFreeVoxelPayload)
+{
+  surf_multirobot_msgs::msg::VoxelDelta input;
+  input.chunk_count = 1; input.resolution = .05;
+  input.x = {40}; input.y = {0}; input.z = {20};
+  input.state = {input.STATE_OCCUPIED_STATIC};
+  input.observation_time_ns = {123};
+  geometry_msgs::msg::Point origin;
+  origin.x = .025; origin.y = .025; origin.z = 1.025;
+  input.ray_flags = {2}; input.ray_origins = {origin};
+  input.ray_endpoints = {geometry_msgs::msg::Point()};
+  surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
+  ASSERT_TRUE(surf::comms::encode_delta(input, wire).ok);
+  surf_multirobot_msgs::msg::VoxelDelta output;
+  ASSERT_TRUE(surf::comms::decode_delta(wire, output).ok);
+  ASSERT_EQ(output.ray_flags.size(), 1U);
+  EXPECT_EQ(output.ray_flags[0], 2);
+  EXPECT_DOUBLE_EQ(output.ray_origins[0].x, origin.x);
+  EXPECT_DOUBLE_EQ(output.ray_endpoints[0].x, 0.0);
 }
 
 }  // namespace

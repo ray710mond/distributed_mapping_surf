@@ -34,3 +34,10 @@ int32[] z
 uint8[] state
 # Observation time for each voxel record, in nanoseconds in the header clock domain.
 uint64[] observation_time_ns
+# Optional measured-ray metadata per record. Flag 1 is a sampled FREE prefix;
+# flag 2 is an occupied hit with its own scan origin (the endpoint is the voxel
+# center). The receiver reconstructs free prefixes locally. Empty arrays are
+# legacy voxel updates.
+uint8[] ray_flags
+geometry_msgs/Point[] ray_origins
+geometry_msgs/Point[] ray_endpoints

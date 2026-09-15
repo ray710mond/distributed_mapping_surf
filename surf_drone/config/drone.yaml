@@ -27,6 +27,8 @@
       # do not expand a single free ray into a wholly free coarse voxel.
       radius_metres: 100.0
       maximum_ray_cells_per_scan: 32768
+      # Receiver reconstructs free prefixes from occupied hits; do not transmit novel free samples.
+      new_free_ray_stride: 0
     compression_level: 1
     transport:
       maximum_packet_bytes: 1200
@@ -81,10 +83,12 @@
       # Outdoor control intervals reached 1.00 s; allow a selection opportunity.
       defer_seconds: 1.5
     capacity:
-      development_bytes_per_second: 10000.0
+      development_bytes_per_second: 10000000.0
       telemetry_timeout_seconds: 3.0
     scheduling:
-      cluster_enabled: true
+      # Ray prefixes reconstruct connected free evidence at the receiver;
+      # sparse sender records should be ranked by priority, not clustered.
+      cluster_enabled: false
       # Per-voxel bonus = weight * log(1 + unsent changed neighbors).
       spatial_change_weight: 1.0
       maximum_entries_per_cycle: 4096
@@ -100,20 +104,20 @@
       delta:
         base: 1.0
         age: 1.0
-        proximity: 1.0
+        proximity: 2.0
         # Obstacle evidence precedes the much larger new-free-space volume.
         occupied: 2.0
         dynamic: 1.0
         destructive: 1.0
         age_seconds: 10.0
-        distance_metres: 10.0
+        distance_metres: 30.0
       backlog:
         base: 1.0
         age: 2.0
-        proximity: 1.0
+        proximity: 2.0
         # Obstacle evidence precedes the much larger new-free-space volume.
         occupied: 2.0
         dynamic: 1.0
         destructive: 1.0
         age_seconds: 10.0
-        distance_metres: 10.0
+        distance_metres: 30.0

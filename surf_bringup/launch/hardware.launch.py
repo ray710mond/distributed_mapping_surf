@@ -647,7 +647,7 @@ def generate_launch_description():
             description='Optional experiment notes stored verbatim.'),
         DeclareLaunchArgument('capacity_interface', default_value=''),
         DeclareLaunchArgument('capacity_mmrc_factor', default_value='0.0'),
-        DeclareLaunchArgument('capacity_development_bps', default_value='10000.0'),
+        DeclareLaunchArgument('capacity_development_bps', default_value='10000000.0'),
         DeclareLaunchArgument(
             'tracker_clock_sync_method', default_value='unverified',
             description='Verified clock synchronization method, or unverified.'),

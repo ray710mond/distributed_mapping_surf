@@ -1,10 +1,12 @@
-#include <limits>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <set>
 #include <memory>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +26,48 @@
 
 namespace surf_humanoid
 {
+namespace detail
+{
+struct RayCoord {int32_t x, y, z; bool operator==(const RayCoord & b) const {
+  return x == b.x && y == b.y && z == b.z;}};
+RayCoord ray_quantize(double x, double y, double z, double resolution) {
+  return {static_cast<int32_t>(std::floor(x / resolution)),
+    static_cast<int32_t>(std::floor(y / resolution)),
+    static_cast<int32_t>(std::floor(z / resolution))};
+}
+template<class Visitor>
+void visit_ray(const geometry_msgs::msg::Point & origin, const geometry_msgs::msg::Point & endpoint,
+  double resolution, std::size_t limit, Visitor visit)
+{
+  RayCoord c = ray_quantize(origin.x, origin.y, origin.z, resolution);
+  const RayCoord end = ray_quantize(endpoint.x, endpoint.y, endpoint.z, resolution);
+  const double origins[] = {origin.x, origin.y, origin.z};
+  const double directions[] = {endpoint.x - origin.x, endpoint.y - origin.y, endpoint.z - origin.z};
+  int32_t * axes[] = {&c.x, &c.y, &c.z};
+  std::array<int, 3> step{};
+  std::array<double, 3> next{}, increment{};
+  for (int axis = 0; axis < 3; ++axis) {
+    if (directions[axis] == 0) {
+      next[axis] = increment[axis] = std::numeric_limits<double>::infinity();
+    } else {
+      step[axis] = directions[axis] > 0 ? 1 : -1;
+      const double boundary = (*axes[axis] + (step[axis] > 0 ? 1.0 : 0.0)) * resolution;
+      next[axis] = (boundary - origins[axis]) / directions[axis];
+      increment[axis] = resolution / std::abs(directions[axis]);
+    }
+  }
+  for (std::size_t visited = 0; !(c == end) && visited < limit; ++visited) {
+    if (!visit(c)) break;
+    const double crossing = *std::min_element(next.begin(), next.end());
+    if (crossing >= 1.0) break;
+    for (int axis = 0; axis < 3; ++axis) if (next[axis] <= crossing + 1e-12) {
+      *axes[axis] += step[axis]; next[axis] += increment[axis];
+    }
+  }
+}
+}
+using detail::RayCoord;
+using detail::visit_ray;
 
 class DroneDataReceiver : public rclcpp::Node
 {
@@ -48,6 +92,14 @@ public:
       "metrics_topic", "/" + robot_name_ + "/comm/delivery_metrics");
     maximum_uncompressed_bytes_ = static_cast<std::size_t>(std::max<int64_t>(
       1024, declare_parameter<int64_t>("maximum_uncompressed_bytes", 64 * 1024 * 1024)));
+    ray_min_range_ = declare_parameter<double>("free_ray.min_range", 0.75);
+    ray_self_radius_ = declare_parameter<double>("free_ray.self_radius", 0.7);
+    ray_min_z_ = declare_parameter<double>("free_ray.min_z", 0.25);
+    ray_max_z_ = declare_parameter<double>("free_ray.max_z", 20.0);
+    ray_radius_ = declare_parameter<double>("free_ray.radius_metres", 100.0);
+    ray_resolution_ = declare_parameter<double>("free_ray.resolution", 0.05);
+    ray_max_voxels_ = static_cast<std::size_t>(std::max<int64_t>(
+      1, declare_parameter<int64_t>("free_ray.maximum_voxels", 1200)));
     peer_odometry_topic_ = declare_parameter<std::string>(
       "peer_odometry_topic", "/humanoid/transport/drone_odometry");
     peer_box_size_x_ = std::max(
@@ -133,6 +185,82 @@ private:
     receive_information(*packet);
   }
 
+  bool expand_rays(surf_multirobot_msgs::msg::VoxelDelta & delta)
+  {
+    if (delta.ray_flags.empty()) return true;
+    if (!std::isfinite(ray_resolution_) || ray_resolution_ <= 0 ||
+      std::abs(ray_resolution_ - delta.resolution) > 1e-6) return false;
+    const auto count = delta.x.size();
+    if (delta.ray_flags.size() != count || delta.ray_origins.size() != count ||
+      delta.ray_endpoints.size() != count) return false;
+    auto expanded = delta;
+    expanded.x.clear(); expanded.y.clear(); expanded.z.clear();
+    expanded.state.clear(); expanded.observation_time_ns.clear();
+    expanded.ray_flags.clear(); expanded.ray_origins.clear(); expanded.ray_endpoints.clear();
+    std::set<std::array<int32_t, 3>> occupied_endpoints;
+    for (std::size_t i = 0; i < count; ++i)
+      if (delta.state[i] == delta.STATE_OCCUPIED_STATIC || delta.state[i] == delta.STATE_OCCUPIED_DYNAMIC)
+        occupied_endpoints.insert({delta.x[i], delta.y[i], delta.z[i]});
+    auto add = [&](RayCoord c, uint8_t state, uint64_t stamp) {
+      expanded.x.push_back(c.x); expanded.y.push_back(c.y); expanded.z.push_back(c.z);
+      expanded.state.push_back(state); expanded.observation_time_ns.push_back(stamp);
+    };
+    for (std::size_t i = 0; i < count; ++i) {
+      const RayCoord target{delta.x[i], delta.y[i], delta.z[i]};
+      if (!delta.ray_flags[i]) {
+        add(target, delta.state[i], delta.observation_time_ns[i]);
+        continue;
+      }
+      const bool occupied_ray = delta.ray_flags[i] == 2;
+      if (delta.ray_flags[i] != 1 && !occupied_ray) return false;
+      if (!occupied_ray && delta.state[i] != surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE) return false;
+      if (occupied_ray && delta.state[i] != delta.STATE_OCCUPIED_STATIC &&
+        delta.state[i] != delta.STATE_OCCUPIED_DYNAMIC) return false;
+      const auto & origin = delta.ray_origins[i];
+      geometry_msgs::msg::Point endpoint = delta.ray_endpoints[i];
+      if (occupied_ray) {
+        endpoint.x = (static_cast<double>(target.x) + .5) * ray_resolution_;
+        endpoint.y = (static_cast<double>(target.y) + .5) * ray_resolution_;
+        endpoint.z = (static_cast<double>(target.z) + .5) * ray_resolution_;
+      }
+      if (!std::isfinite(origin.x + origin.y + origin.z + endpoint.x + endpoint.y + endpoint.z))
+        return false;
+      const double coordinate_limit =
+        (static_cast<double>(std::numeric_limits<int32_t>::max()) - ray_max_voxels_) * ray_resolution_;
+      if (std::max({std::abs(origin.x), std::abs(origin.y), std::abs(origin.z),
+        std::abs(endpoint.x), std::abs(endpoint.y), std::abs(endpoint.z)}) > coordinate_limit)
+        return false;
+      bool reached = false;
+      const std::size_t before = expanded.x.size();
+      visit_ray(origin, endpoint, ray_resolution_, ray_max_voxels_, [&](RayCoord c) {
+        if (occupied_ray && occupied_endpoints.count({c.x, c.y, c.z})) return false;
+        const double cx = (static_cast<double>(c.x) + .5) * ray_resolution_;
+        const double cy = (static_cast<double>(c.y) + .5) * ray_resolution_;
+        const double cz = (static_cast<double>(c.z) + .5) * ray_resolution_;
+        const double distance = std::sqrt((cx-origin.x)*(cx-origin.x) +
+          (cy-origin.y)*(cy-origin.y) + (cz-origin.z)*(cz-origin.z));
+        if (distance > ray_radius_) return false;
+        if (distance >= std::max(ray_min_range_, ray_self_radius_) &&
+          cz >= ray_min_z_ && cz <= ray_max_z_)
+          add(c, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, delta.observation_time_ns[i]);
+        if (c == target) {reached = true; return false;}
+        return true;
+      });
+      // A grazing beam or filter mismatch can diverge from sender traversal.
+      // Keep the sampled observation without claiming an unmatched prefix.
+      if (occupied_ray) {
+        add(target, delta.state[i], delta.observation_time_ns[i]);
+      } else if (!reached) {
+        expanded.x.resize(before); expanded.y.resize(before); expanded.z.resize(before);
+        expanded.state.resize(before); expanded.observation_time_ns.resize(before);
+        add(target, delta.state[i], delta.observation_time_ns[i]);
+      }
+      if (expanded.x.size() > 65536) return false;
+    }
+    delta = std::move(expanded);
+    return true;
+  }
+
   void receive_information(const surf_multirobot_msgs::msg::CompressedVoxelDelta & packet)
   {
     const auto started = std::chrono::steady_clock::now();
@@ -142,7 +270,9 @@ private:
     if (!decoded.ok || packet.source_id.empty() || packet.full_refresh ||
       packet.chunk_index != 0 || packet.chunk_count != 1 ||
       !std::isfinite(packet.resolution) || packet.resolution <= 0 ||
-      std::any_of(delta.state.begin(), delta.state.end(), [](uint8_t s) {return s < 1 || s > 4;})) return;
+      std::any_of(delta.state.begin(), delta.state.end(), [](uint8_t s) {return s < 1 || s > 5;})) return;
+    if (!expand_rays(delta)) return;
+    const auto expanded_at = std::chrono::steady_clock::now();
     auto & temporal = temporal_sources_[packet.source_id];
     const auto stale_before = temporal.stale;
     const auto regressions_before = temporal.attempted_regressions;
@@ -166,7 +296,7 @@ private:
     m.source_id = packet.source_id; m.map_epoch = packet.map_epoch; m.version = packet.version;
     m.traffic_class = packet.traffic_class; m.voxel_count = packet.voxel_count; m.chunk_count = 1;
     m.decode_latency_ms = std::chrono::duration<double, std::milli>(decoded_at - started).count();
-    m.codec_reconstruction_ms = m.decode_latency_ms; // decode_delta includes codec reconstruction.
+    m.codec_reconstruction_ms = std::chrono::duration<double, std::milli>(expanded_at - started).count();
     // No downstream map integration ACK is available; do not report default zero latency.
     m.end_to_end_latency_ms = std::numeric_limits<float>::quiet_NaN();
     m.transport_latency_ms = std::numeric_limits<float>::quiet_NaN();
@@ -230,6 +360,10 @@ private:
   double peer_box_padding_{0.20};
   double peer_box_max_age_ms_{150.0};
   std::size_t maximum_uncompressed_bytes_{64U * 1024U * 1024U};
+  double ray_min_range_{0.75}, ray_self_radius_{0.7};
+  double ray_min_z_{0.25}, ray_max_z_{20.0}, ray_radius_{100.0};
+  double ray_resolution_{0.05};
+  std::size_t ray_max_voxels_{1200};
   std::chrono::steady_clock::time_point last_sync_request_time_{};
 
   rclcpp::Publisher<surf_multirobot_msgs::msg::VoxelDelta>::SharedPtr publisher_;

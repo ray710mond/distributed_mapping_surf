@@ -77,6 +77,7 @@ TEST(InformationDelivery, ReoccupyingClearedStaticPriorCreatesNewDebt)
   {
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("mapping.new_free_ray_stride", int64_t(16)),
       rclcpp::Parameter("filters.clear_min_misses", int64_t(1))}));
     auto probe = std::make_shared<rclcpp::Node>("prior_reoccupation_probe");
     using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
@@ -211,16 +212,19 @@ TEST(InformationDelivery, NewFreeSpaceAndExpiryHaveDifferentEvidence)
     using Packet=surf_multirobot_msgs::msg::CompressedVoxelDelta;
     auto sender=std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled",false),
+      rclcpp::Parameter("mapping.new_free_ray_stride",int64_t(256)),
       rclcpp::Parameter("dynamic_retention_scans",int64_t(1))}));
     auto probe=std::make_shared<rclcpp::Node>("free_evidence_probe");
     auto pub=probe->create_publisher<sensor_msgs::msg::PointCloud2>("/drone/points",rclcpp::SensorDataQoS());
     auto da=probe->create_publisher<surf_multirobot_msgs::msg::RealtimeAck>("/drone/transport/realtime_ack",10);
     auto ba=probe->create_publisher<surf_multirobot_msgs::msg::SyncAck>("/drone/transport/sync_ack",rclcpp::QoS(10).reliable().transient_local());
-    bool new_free=false, endpoint_occupied=false, endpoint_unknown=false, endpoint_free=false;
+    bool new_free=false, new_free_ray=false, endpoint_occupied=false, endpoint_unknown=false, endpoint_free=false;
     auto receive=[&](const Packet & p) {
       Delta d; ASSERT_TRUE(surf::comms::decode_delta(p,d,1024*1024).ok);
       for(std::size_t i=0;i<d.x.size();++i) {
-        if(d.x[i]==20 && d.y[i]==0 && d.z[i]==10 && d.state[i]==Delta::STATE_FREE) new_free=true;
+        if(d.state[i]==Delta::STATE_FREE) {
+          new_free=true; new_free_ray |= !d.ray_flags.empty() && d.ray_flags[i]==1;
+        }
         if(d.x[i]==40 && d.y[i]==0 && d.z[i]==20) {
           endpoint_occupied |= d.state[i]==Delta::STATE_OCCUPIED_DYNAMIC;
           endpoint_unknown |= d.state[i]==Delta::STATE_UNKNOWN;
@@ -249,7 +253,7 @@ TEST(InformationDelivery, NewFreeSpaceAndExpiryHaveDifferentEvidence)
       pub->publish(c);
     };
     spin(.3);scan(true);spin(1);
-    EXPECT_TRUE(new_free);EXPECT_TRUE(endpoint_occupied);EXPECT_FALSE(endpoint_free);
+    EXPECT_TRUE(new_free);EXPECT_TRUE(new_free_ray);EXPECT_TRUE(endpoint_occupied);EXPECT_FALSE(endpoint_free);
     scan(false);spin(.2);scan(false);spin(1.5);
     EXPECT_TRUE(endpoint_unknown);EXPECT_FALSE(endpoint_free);
     exec.remove_node(sender);exec.remove_node(probe);

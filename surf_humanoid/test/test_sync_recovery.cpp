@@ -52,3 +52,73 @@ TEST(Receiver, SpatialReorderingBacklogRetryAndEpochRejection) {
   }
   rclcpp::shutdown();
 }
+
+TEST(Receiver, ReconstructsMeasuredFreePrefixFromOldBacklogOrigin) {
+  rclcpp::init(0, nullptr);
+  {
+    auto receiver = std::make_shared<surf_humanoid::DroneDataReceiver>();
+    auto probe = std::make_shared<rclcpp::Node>("ray_receiver_probe");
+    using Delta = surf_multirobot_msgs::msg::VoxelDelta;
+    using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
+    std::vector<Delta> received;
+    auto pub = probe->create_publisher<Packet>("/humanoid/transport/sync_tx", surf::comms::sync_qos());
+    auto sub = probe->create_subscription<Delta>("/humanoid/comm/drone_voxel_delta",
+      rclcpp::QoS(128).reliable().transient_local(), [&](const Delta & d) {received.push_back(d);});
+    rclcpp::executors::SingleThreadedExecutor exec; exec.add_node(receiver); exec.add_node(probe);
+    for (int i=0;i<20;++i) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+    Delta d; d.header.frame_id="map"; d.header.stamp=probe->now();
+    d.source_id="drone"; d.map_epoch=77; d.version=1; d.operating_mode=4;
+    d.chunk_count=1; d.resolution=.05; d.x={20};d.y={0};d.z={20};
+    d.state={Delta::STATE_FREE}; d.observation_time_ns={123456789ULL};
+    geometry_msgs::msg::Point origin, endpoint;
+    origin.x=.025;origin.y=.025;origin.z=1.025;
+    endpoint.x=2.025;endpoint.y=.025;endpoint.z=1.025;
+    d.ray_flags={1};d.ray_origins={origin};d.ray_endpoints={endpoint};
+    Packet p;ASSERT_TRUE(surf::comms::encode_delta(d,p,1).ok);
+    p.traffic_class=2;p.transmit_stamp=probe->now();pub->publish(p);
+    for (int i=0;i<40;++i) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+    ASSERT_FALSE(received.empty());
+    const auto & result=received.back();
+    EXPECT_GT(result.x.size(),1U);
+    EXPECT_EQ(result.x.front(),15);
+    EXPECT_EQ(result.x.back(),20);
+    for (std::size_t i=1;i<result.x.size();++i) EXPECT_EQ(result.x[i],result.x[i-1]+1);
+    exec.remove_node(receiver);exec.remove_node(probe);
+  }
+  rclcpp::shutdown();
+}
+
+TEST(Receiver, ReconstructsFreePrefixFromOccupiedHitOrigin) {
+  rclcpp::init(0, nullptr);
+  {
+    auto receiver = std::make_shared<surf_humanoid::DroneDataReceiver>();
+    auto probe = std::make_shared<rclcpp::Node>("occupied_origin_probe");
+    using Delta = surf_multirobot_msgs::msg::VoxelDelta;
+    using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
+    std::vector<Delta> received;
+    auto pub = probe->create_publisher<Packet>("/humanoid/transport/sync_tx", surf::comms::sync_qos());
+    auto sub = probe->create_subscription<Delta>("/humanoid/comm/drone_voxel_delta",
+      rclcpp::QoS(128).reliable().transient_local(), [&](const Delta & d) {received.push_back(d);});
+    rclcpp::executors::SingleThreadedExecutor exec; exec.add_node(receiver); exec.add_node(probe);
+    for (int i=0;i<20;++i) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+    Delta d; d.header.frame_id="map"; d.header.stamp=probe->now(); d.chunk_count=1;
+    d.source_id="drone"; d.map_epoch=88; d.version=1; d.operating_mode=4; d.resolution=.05;
+    d.sensor_origin.x=10.0; // Latest origin must not be used for this old hit.
+    d.x={40}; d.y={0}; d.z={20}; d.state={Delta::STATE_OCCUPIED_STATIC};
+    d.observation_time_ns={123456789ULL};
+    geometry_msgs::msg::Point origin; origin.x=.025; origin.y=.025; origin.z=1.025;
+    d.ray_flags={2}; d.ray_origins={origin}; d.ray_endpoints={geometry_msgs::msg::Point()};
+    Packet p; ASSERT_TRUE(surf::comms::encode_delta(d,p,1).ok);
+    p.traffic_class=2; p.transmit_stamp=probe->now(); pub->publish(p);
+    for (int i=0;i<40;++i) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
+    ASSERT_FALSE(received.empty());
+    const auto & result=received.back();
+    EXPECT_GT(result.x.size(),1U);
+    EXPECT_EQ(result.x.front(),15);
+    EXPECT_EQ(result.x.back(),40);
+    EXPECT_EQ(result.state.back(),Delta::STATE_OCCUPIED_STATIC);
+    for (std::size_t i=0;i+1<result.x.size();++i) EXPECT_EQ(result.state[i],Delta::STATE_FREE);
+    exec.remove_node(receiver); exec.remove_node(probe);
+  }
+  rclcpp::shutdown();
+}

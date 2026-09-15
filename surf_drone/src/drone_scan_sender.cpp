@@ -53,13 +53,18 @@ namespace
 
 void append_record(
   surf_multirobot_msgs::msg::VoxelDelta & delta,
-  const Coord & coord, uint8_t state, uint64_t observation_time_ns)
+  const Coord & coord, uint8_t state, uint64_t observation_time_ns,
+  uint8_t ray_flag = 0, geometry_msgs::msg::Point ray_origin = geometry_msgs::msg::Point(),
+  geometry_msgs::msg::Point ray_endpoint = geometry_msgs::msg::Point())
 {
   delta.x.push_back(coord.x);
   delta.y.push_back(coord.y);
   delta.z.push_back(coord.z);
   delta.state.push_back(state);
   delta.observation_time_ns.push_back(observation_time_ns);
+  delta.ray_flags.push_back(ray_flag);
+  delta.ray_origins.push_back(ray_origin);
+  delta.ray_endpoints.push_back(ray_endpoint);
 }
 
 uint64_t stamp_to_nanoseconds(const builtin_interfaces::msg::Time & stamp)
@@ -148,6 +153,8 @@ public:
       1, declare_parameter<int64_t>("maximum_clear_rays", 256)));
     maximum_ray_work_ = static_cast<std::size_t>(std::max<int64_t>(
       1, declare_parameter<int64_t>("mapping.maximum_ray_cells_per_scan", 32768)));
+    new_free_ray_stride_ = static_cast<std::size_t>(std::max<int64_t>(
+      0, declare_parameter<int64_t>("mapping.new_free_ray_stride", 1)));
     mapping_radius_ = declare_parameter<double>("mapping.radius_metres", 10.0);
     if (!std::isfinite(resolution_) || resolution_ <= 0 ||
       !std::isfinite(mapping_radius_) || mapping_radius_ <= 0)
@@ -654,10 +661,12 @@ private:
       const bool receiver_has_overlay = debt_.entries.find(coord) != debt_.entries.end();
       const bool send = (!represented_by_prior || receiver_has_overlay) && new_information;
       if (send) {
+        geometry_msgs::msg::Point scan_origin;
+        scan_origin.x = translation.x(); scan_origin.y = translation.y(); scan_origin.z = translation.z();
         append_record(realtime, coord, cell.static_known ?
           surf_multirobot_msgs::msg::VoxelDelta::STATE_OCCUPIED_STATIC :
           surf_multirobot_msgs::msg::VoxelDelta::STATE_OCCUPIED_DYNAMIC,
-          cell.last_observation_time_ns);
+          cell.last_observation_time_ns, 2, scan_origin);
         cell.last_classified_version = version_;
         cell.last_classified_static = cell.static_known;
       }
@@ -675,12 +684,16 @@ private:
       return std::tie(a.x, a.y, a.z) < std::tie(b.x, b.y, b.z);
     });
     std::unordered_set<Coord, CoordHash> observed_free;
+    std::unordered_map<Coord, tf2::Vector3, CoordHash> selected_ray_targets;
     std::size_t ray_work = 0, sampled_rays = 0;
     while (!ray_endpoints.empty() && sampled_rays < ray_endpoints.size() &&
       sampled_rays < static_cast<std::size_t>(maximum_clear_rays_) && ray_work < maximum_ray_work_)
     {
       const Coord endpoint = ray_endpoints[ray_cursor_++ % ray_endpoints.size()];
       ++sampled_rays;
+      bool safe_prefix = true;
+      bool have_safe_target = false;
+      Coord safe_target{};
       ray_work += visit_observed_ray(translation, endpoints.at(endpoint), resolution_,
         std::min(static_cast<std::size_t>(maximum_ray_voxels_), maximum_ray_work_ - ray_work),
         [&](const Coord & coord) {
@@ -690,10 +703,19 @@ private:
           // A measured endpoint, including another ray's endpoint, occludes free
           // evidence behind it. Never clear the peer-owned body or the sensor.
           if (current.count(coord) || (humanoid_mask && humanoid_mask->contains(coord, resolution_))) return false;
-          if (distance >= std::max(min_range_, self_radius_) && center.z() >= min_z_ && center.z() <= max_z_)
+          const auto cleared = tombstones_.find(coord);
+          const bool prior_cleared = cleared != tombstones_.end() &&
+            cleared->second.state == surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE;
+          if (cells_.find(coord) != cells_.end() ||
+            (static_snapshot->count(coord) && !prior_cleared)) safe_prefix = false;
+          if (distance >= std::max(min_range_, self_radius_) && center.z() >= min_z_ && center.z() <= max_z_) {
             observed_free.insert(coord);
+            if (safe_prefix && !prior_cleared) {safe_target = coord; have_safe_target = true;}
+          }
           return true;
         });
+      if (new_free_ray_stride_ && have_safe_target && new_free_ray_cursor_++ % new_free_ray_stride_ == 0)
+        selected_ray_targets.try_emplace(safe_target, endpoints.at(endpoint));
     }
     uint32_t free_updates = 0, unknown_updates = 0;
     for (const auto & coord : observed_free) {
@@ -704,6 +726,9 @@ private:
       if (cells_.find(coord) == cells_.end() && static_snapshot->count(coord))
         cells_[coord].static_known = true;
       auto found = cells_.find(coord);
+      // Clearing an obstacle already known to either map is always delivered.
+      // Novel open space is sampled to bound its network and recovery cost.
+      const bool clears_occupied = found != cells_.end() || static_snapshot->count(coord) != 0;
       if (found != cells_.end()) {
         // Existing occupied evidence requires repeated misses; a previously
         // unknown cell may become free on its first measured ray traversal.
@@ -713,9 +738,22 @@ private:
       }
       const auto old = tombstones_.find(coord);
       if (old != tombstones_.end() && old->second.state == surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE) continue;
-      tombstones_[coord] = {version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns};
-      append_record(realtime, coord, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns);
-      ++free_updates;
+      const auto safe_endpoint = selected_ray_targets.find(coord);
+      if (clears_occupied || safe_endpoint != selected_ray_targets.end()) {
+        tombstones_[coord] = {version_, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE, scan_time_ns};
+        geometry_msgs::msg::Point ray_origin, ray_endpoint;
+        uint8_t ray_flag = 0;
+        if (!clears_occupied && safe_endpoint != selected_ray_targets.end()) {
+          ray_flag = 1;
+          ray_origin.x = translation.x(); ray_origin.y = translation.y(); ray_origin.z = translation.z();
+          ray_endpoint.x = safe_endpoint->second.x();
+          ray_endpoint.y = safe_endpoint->second.y();
+          ray_endpoint.z = safe_endpoint->second.z();
+        }
+        append_record(realtime, coord, surf_multirobot_msgs::msg::VoxelDelta::STATE_FREE,
+          scan_time_ns, ray_flag, ray_origin, ray_endpoint);
+        ++free_updates;
+      }
     }
 
     // Lack of a return is not measured free space. Withdraw only this source's
@@ -757,7 +795,8 @@ private:
         information_priority(weights_[0], 0,
           humanoid_mask ? (tf2::Vector3((realtime.x[i]+.5)*resolution_,
             (realtime.y[i]+.5)*resolution_, (realtime.z[i]+.5)*resolution_) - humanoid_mask->center).length() :
-            std::numeric_limits<double>::infinity(), realtime.state[i]));
+            std::numeric_limits<double>::infinity(), realtime.state[i]),
+        realtime.ray_flags[i], realtime.ray_origins[i], realtime.ray_endpoints[i]);
     }
     last_header_ = realtime.header;
     last_origin_ = realtime.sensor_origin;
@@ -1000,8 +1039,11 @@ private:
         const double encoding_start = steady_seconds();
         for (int encoding_trial = 0; trial > low && encoding_trial < 12; ++encoding_trial) {
           delta.x.clear(); delta.y.clear(); delta.z.clear(); delta.state.clear(); delta.observation_time_ns.clear();
+          delta.ray_flags.clear(); delta.ray_origins.clear(); delta.ray_endpoints.clear();
           for (std::size_t j = 0; j < trial; ++j)
-            append_record(delta, candidates[offset+j]->coord, candidates[offset+j]->state, candidates[offset+j]->stamp);
+            append_record(delta, candidates[offset+j]->coord, candidates[offset+j]->state,
+              candidates[offset+j]->stamp, candidates[offset+j]->ray_flag,
+              candidates[offset+j]->ray_origin, candidates[offset+j]->ray_endpoint);
           surf_multirobot_msgs::msg::CompressedVoxelDelta wire;
           const auto result = surf::comms::encode_delta(delta, wire, compression_level_);
           if (!result.ok) {RCLCPP_ERROR(get_logger(), "%s", result.error.c_str()); break;}
@@ -1091,6 +1133,7 @@ private:
   double resolution_{0.05};
   double mapping_radius_{10.0};
   std::size_t maximum_ray_work_{32768}, ray_cursor_{0}, maximum_control_entries_{4096};
+  std::size_t new_free_ray_stride_{1}, new_free_ray_cursor_{0};
   std::size_t maximum_cluster_entries_{8192};
   int cluster_neighbour_radius_{2};
   bool cluster_scheduling_enabled_{true};
