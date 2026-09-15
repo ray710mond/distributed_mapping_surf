@@ -25,7 +25,7 @@
     mapping:
       # Observed local region around the current sensor. Keep fine resolution;
       # do not expand a single free ray into a wholly free coarse voxel.
-      radius_metres: 10.0
+      radius_metres: 100.0
       maximum_ray_cells_per_scan: 32768
     compression_level: 1
     transport:
@@ -37,7 +37,7 @@
     maximum_clear_rays: 1024
     filters:
       min_range: 0.75
-      max_range: 50.0
+      max_range: 150.0
       min_z: 0.25
       max_z: 20.0
       self_radius: 0.7
