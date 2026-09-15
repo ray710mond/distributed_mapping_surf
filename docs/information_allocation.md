@@ -150,6 +150,9 @@ Preference is a directly supplied application-capacity measurement, then a
 guarded estimate from fresh MMRC rate-control telemetry and selected-rate success
 probability. Achieved interface throughput never substitutes for capacity.
 Missing or stale MMRC data grant zero map credit.
+The sender gives link-metric callbacks their own executor group and lock so
+controller/scan ledger work cannot delay a locally published measurement past
+the three-second sender freshness timeout.
 
 Source inspection of the installed Morse MM8108 2.0.0 driver found
 `mmrc_table_csv` (selected MCS/bandwidth/GI, rate-control throughput statistics,

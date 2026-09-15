@@ -323,9 +323,12 @@ public:
     static_map_subscription_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       static_map_topic_, rclcpp::QoS(1).reliable().durability_volatile(),
       std::bind(&DroneScanSender::static_map_callback, this, std::placeholders::_1));
+    link_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    rclcpp::SubscriptionOptions link_options;
+    link_options.callback_group = link_callback_group_;
     link_metrics_subscription_ = create_subscription<surf_multirobot_msgs::msg::LinkMetrics>(
       link_metrics_topic_, rclcpp::QoS(10),
-      std::bind(&DroneScanSender::link_metrics_callback, this, std::placeholders::_1));
+      std::bind(&DroneScanSender::link_metrics_callback, this, std::placeholders::_1), link_options);
     {
       // Priority relevance consumes peer pose independently of mask filtering.
       humanoid_odometry_subscription_ = create_subscription<nav_msgs::msg::Odometry>(
@@ -458,7 +461,7 @@ private:
   void link_metrics_callback(const surf_multirobot_msgs::msg::LinkMetrics::SharedPtr metrics)
   {
     if (metrics->link_name != "halow") return;
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::lock_guard<std::mutex> lock(link_metrics_mutex_);
     capacity_received_ = steady_seconds();
     link_metrics_ = *metrics;
   }
@@ -919,10 +922,13 @@ private:
     const auto & x = debt_cycle.debt;
     double capacity = 0;
     std::string method = "waiting_for_telemetry";
-    if (capacity_received_ > 0) {
-      capacity = start - capacity_received_ <= capacity_timeout_ && link_metrics_.usable_capacity_valid ?
-        link_metrics_.usable_capacity_bytes_per_second : 0;
-      method = start - capacity_received_ <= capacity_timeout_ ? link_metrics_.capacity_method : "stale_telemetry";
+    {
+      std::lock_guard<std::mutex> link_lock(link_metrics_mutex_);
+      if (capacity_received_ > 0) {
+        capacity = start - capacity_received_ <= capacity_timeout_ && link_metrics_.usable_capacity_valid ?
+          link_metrics_.usable_capacity_bytes_per_second : 0;
+        method = start - capacity_received_ <= capacity_timeout_ ? link_metrics_.capacity_method : "stale_telemetry";
+      }
     }
     if (!std::isfinite(capacity) || capacity < 0) capacity = 0;
     const double controller_start = steady_seconds();
@@ -965,6 +971,18 @@ private:
     m.retained_count = debt_.entries.size();
     m.pending_count = debt_cycle.pending_count;
     m.inflight_count = debt_cycle.inflight_count;
+    const uint64_t outstanding = m.pending_count[0] + m.pending_count[1];
+    if (capacity == 0 && outstanding && map_capacity_pause_reason_ != method) {
+      map_capacity_pause_reason_ = method;
+      RCLCPP_WARN(get_logger(),
+        "Map transmission paused: zero usable capacity (%s); %llu updates outstanding",
+        method.c_str(), static_cast<unsigned long long>(outstanding));
+    } else if (capacity > 0 && !map_capacity_pause_reason_.empty()) {
+      RCLCPP_INFO(get_logger(),
+        "Map transmission resumed: %.0f bytes/s (%s); %llu updates outstanding",
+        capacity, method.c_str(), static_cast<unsigned long long>(outstanding));
+      map_capacity_pause_reason_.clear();
+    }
     m.pending_age_bucket_count = debt_cycle.pending_age_bucket_count;
     m.max_priority_remaining = debt_cycle.max_priority_remaining;
     m.ack_lag_samples = debt_cycle.ack_lag_samples;
@@ -1169,6 +1187,7 @@ private:
   InformationDebt debt_;
   std::array<PriorityWeights, 2> weights_;
   std::mutex state_mutex_;
+  std::mutex link_metrics_mutex_;
   double control_dt_{.1}, defer_seconds_{1.5}, capacity_timeout_{3};
   double capacity_received_{0}, last_control_time_{0}, matrix_update_time_{0};
   std::array<double, 2> credits_{}, last_scheduled_{};
@@ -1176,6 +1195,7 @@ private:
   double starvation_fraction_{0.1}, starvation_age_seconds_{30};
   std::array<double, 2> previous_debt_{};
   double shared_credit_{0};
+  std::string map_capacity_pause_reason_;
   uint64_t packet_version_{0}, last_scan_stamp_{0};
   bool have_scan_stamp_{false};
   std_msgs::msg::Header last_header_;
@@ -1230,6 +1250,7 @@ private:
   rclcpp::Publisher<surf_multirobot_msgs::msg::RealtimeAckMetrics>::SharedPtr
     realtime_ack_metrics_publisher_;
   rclcpp::CallbackGroup::SharedPtr ack_callback_group_;
+  rclcpp::CallbackGroup::SharedPtr link_callback_group_;
   rclcpp::TimerBase::SharedPtr realtime_publish_timer_;
 };
 
@@ -1240,7 +1261,7 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   auto sender = std::make_shared<surf_drone::DroneScanSender>();
-  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 2);
+  rclcpp::executors::MultiThreadedExecutor executor(rclcpp::ExecutorOptions(), 3);
   executor.add_node(sender);
   executor.spin();
   rclcpp::shutdown();

@@ -89,6 +89,7 @@ class DataTracker(Node):
         self._configuration_clients = {}
         self._configuration_pending = set()
         self._configuration_saved = set()
+        self._map_capacity_pause_reasons = {}
         self.create_subscription(ParameterEvent, '/parameter_events', self._parameter_event, 100)
         self.create_timer(2.0, self._capture_configuration)
 
@@ -276,6 +277,31 @@ class DataTracker(Node):
         self._record('allocation', 'information_debt', 'controller', payload,
                      wall_time_ns=_stamp_ns(m.header.stamp),
                      event_id=f'allocation:{m.source_id}:{m.map_epoch}:{m.step}')
+        key = (m.source_id, m.map_epoch)
+        previous = self._map_capacity_pause_reasons.get(key)
+        outstanding = int(m.pending_count[0] + m.pending_count[1])
+        reason = m.capacity_method or 'unspecified_zero_capacity'
+        transition = None
+        if m.usable_capacity <= 0 and outstanding and previous != reason:
+            self._map_capacity_pause_reasons[key] = reason
+            transition = ('paused', reason)
+        elif m.usable_capacity > 0 and previous is not None:
+            self._map_capacity_pause_reasons[key] = None
+            transition = ('resumed', previous)
+        if transition:
+            state, stop_reason = transition
+            self._record('transport', 'map_transmission', f'{state}:{stop_reason}', {
+                'transition_count': 1,
+                'state': state,
+                'reason': stop_reason,
+                'capacity_method': m.capacity_method,
+                'usable_capacity_bytes_per_second': m.usable_capacity,
+                'outstanding_updates': outstanding,
+                'source_id': m.source_id,
+                'map_epoch': m.map_epoch,
+                'allocation_step': m.step,
+            }, wall_time_ns=_stamp_ns(m.header.stamp),
+                event_id=f'map-transmission:{m.source_id}:{m.map_epoch}:{m.step}')
 
     def _capacity(self, m):
         self._record('capacity', 'radio', m.link_name, {
