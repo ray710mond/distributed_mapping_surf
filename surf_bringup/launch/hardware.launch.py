@@ -12,10 +12,7 @@ from launch.actions import (
     DeclareLaunchArgument,
     LogInfo,
     OpaqueFunction,
-    RegisterEventHandler,
-    Shutdown,
 )
-from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -481,13 +478,7 @@ def _nodes(context):
                     value_type=float),
             }],
         )
-        actions.extend([
-            clock_guard,
-            RegisterEventHandler(OnProcessExit(
-                target_action=clock_guard,
-                on_exit=[Shutdown(reason='Peer clock guard exited')],
-            )),
-        ])
+        actions.append(clock_guard)
 
     if launch_rviz:
         actions.append(Node(
@@ -547,17 +538,16 @@ def generate_launch_description():
             'clock_guard_enabled',
             default_value='true',
             description=(
-                'Shut down hardware bringup if bridged peer timestamps are absent '
-                'or incompatible with the local clock.')),
+                'Report apparent peer odometry timestamp age and missing samples.')),
         DeclareLaunchArgument(
             'clock_guard_maximum_skew_seconds',
             default_value='1.0',
-            description='Maximum apparent peer odometry timestamp skew.'),
+            description='Apparent peer odometry age above which to warn.'),
         DeclareLaunchArgument(
             'clock_guard_startup_timeout_seconds',
             default_value='10.0',
             description=(
-                'Seconds to wait for verified peer clock evidence after local '
+                'Seconds to wait for timely peer odometry after local '
                 'localization becomes active. Time before initial localization '
                 'does not count.')),
         DeclareLaunchArgument(

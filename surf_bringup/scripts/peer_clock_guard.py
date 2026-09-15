@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail hardware bringup when the peer's ROS clock is not comparable."""
+"""Report apparent peer odometry age without stopping hardware bringup."""
 
 import json
 import time
@@ -30,39 +30,39 @@ class PeerClockGuard(Node):
         self.localized_at = None
         self.good_samples = 0
         self.verified = False
-        self.failed = False
+        self.timeout_reported = False
         self.create_subscription(Odometry, topic, self._odometry, qos_profile_sensor_data)
         self.create_subscription(String, localization_topic, self._localization, 10)
         self.create_timer(0.25, self._check_timeout)
         self.get_logger().info(
-            f'Clock check is disarmed until local localization is active on '
+            f'Peer odometry age monitoring starts when local localization is active on '
             f'{localization_topic}; it will then wait up to {self.startup_timeout:.1f}s '
-            f'for peer clock evidence on {topic}')
-
-    def _fail(self, message):
-        if self.failed:
-            return
-        self.failed = True
-        self.get_logger().fatal(message)
-        rclpy.shutdown()
+            f'for timely peer odometry on {topic}')
 
     def _odometry(self, message):
         if self.localized_at is None:
             return
         stamp_ns = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
-        skew_ns = abs(self.get_clock().now().nanoseconds - stamp_ns)
-        if skew_ns > self.maximum_skew_ns:
-            self._fail(
-                f'Peer clock skew is {skew_ns / 1e9:.3f}s, exceeding the '
-                f'{self.maximum_skew_ns / 1e9:.3f}s limit. Synchronize both host clocks '
-                'before starting SURF.')
+        now_ns = self.get_clock().now().nanoseconds
+        age_ns = now_ns - stamp_ns
+        if abs(age_ns) > self.maximum_skew_ns:
+            self.good_samples = 0
+            direction = 'old' if age_ns > 0 else 'ahead of local time'
+            self.get_logger().warning(
+                f'Peer odometry timestamp is {abs(age_ns) / 1e9:.3f}s {direction}, '
+                f'exceeding the {self.maximum_skew_ns / 1e9:.3f}s limit '
+                f'(local time {now_ns / 1e9:.3f}, header stamp {stamp_ns / 1e9:.3f}). '
+                'Check both hosts with chronyc tracking/sources, then inspect '
+                'odometry publication and bridge latency. This apparent age includes '
+                'clock offset, source age, and transport delay.',
+                throttle_duration_sec=5.0)
             return
         self.good_samples += 1
         if not self.verified and self.good_samples >= self.required_samples:
             self.verified = True
             self.get_logger().info(
-                f'Peer clock verified from {self.good_samples} consecutive samples; '
-                f'latest apparent skew is {skew_ns / 1e6:.1f}ms')
+                f'Peer timestamps within limit for {self.good_samples} consecutive samples; '
+                f'latest apparent timestamp age is {age_ns / 1e6:.1f}ms')
 
     def _localization(self, message):
         if self.localized_at is not None:
@@ -75,14 +75,17 @@ class PeerClockGuard(Node):
             self.localized_at = time.monotonic()
             self.get_logger().info(
                 f'Local localization is {state}; starting the '
-                f'{self.startup_timeout:.1f}s peer-clock deadline')
+                f'{self.startup_timeout:.1f}s peer-odometry monitoring window')
 
     def _check_timeout(self):
         if self.localized_at is not None and not self.verified and \
+                not self.timeout_reported and \
                 time.monotonic() - self.localized_at >= self.startup_timeout:
-            self._fail(
-                f'No verifiable peer timestamps arrived within {self.startup_timeout:.1f}s; '
-                'refusing unsynchronized hardware bringup after localization.')
+            self.timeout_reported = True
+            self.get_logger().warning(
+                f'No peer timestamps within the {self.maximum_skew_ns / 1e9:.3f}s '
+                f'apparent-age limit arrived within {self.startup_timeout:.1f}s '
+                'after localization. Check clock status and bridge latency.')
 
 
 def main(args=None):
