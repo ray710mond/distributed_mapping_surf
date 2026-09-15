@@ -147,8 +147,9 @@ when a coherent multi-matrix update is intended.
 `InformationAllocationController` does not estimate capacity. The separate
 `halow_capacity_provider` uses the existing `NetworkSampler` abstraction.
 Preference is a directly supplied application-capacity measurement, then a
-configured experimental MMRC conversion, then an explicitly configured development
-fallback. Achieved interface throughput never substitutes for capacity.
+guarded estimate from fresh MMRC rate-control telemetry and selected-rate success
+probability. Achieved interface throughput never substitutes for capacity.
+Missing or stale MMRC data grant zero map credit.
 
 Source inspection of the installed Morse MM8108 2.0.0 driver found
 `mmrc_table_csv` (selected MCS/bandwidth/GI, rate-control throughput statistics,
@@ -161,13 +162,13 @@ throughput is a driver rate-control statistic, not measured application goodput
 and not relabeled PHY rate. The live interface query in this development session
 returned “No such device”; no live usable capacity or RSSI was established.
 
-`experimental_mmrc_factor=0` disables conversion until calibrated. A positive
-factor up to one multiplies MMRC Mbps by 125000 to derive bytes/s. The initial
-fallback is 10000 bytes/s and is **not a validated radio capacity**. Calibration
+`experimental_mmrc_factor=0.1` reserves 90% provisional headroom; this is not a
+measured application-goodput ratio. The factor multiplies MMRC Mbps by 125000
+and selected-rate success probability to derive bytes/s. Calibration
 must reserve room for return ACKs, odometry, reliable startup/recovery control,
 bridge framing, IP/radio overhead and other shared traffic. `LinkMetrics` supplies
-capacity with validity and method. Once telemetry has been received, stale/invalid
-telemetry makes map capacity zero instead of silently retaining an old estimate.
+capacity with validity and method. Missing/stale/invalid telemetry makes map
+capacity zero instead of silently granting an unmeasured development credit.
 
 Projection clamps negative/nonfinite requested components to zero, then scales
 positive rates proportionally if their sum exceeds usable capacity:

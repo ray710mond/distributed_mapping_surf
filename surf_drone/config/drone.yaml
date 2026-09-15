@@ -83,7 +83,6 @@
       # Outdoor control intervals reached 1.00 s; allow a selection opportunity.
       defer_seconds: 1.5
     capacity:
-      development_bytes_per_second: 10000000.0
       telemetry_timeout_seconds: 3.0
     scheduling:
       # Ray prefixes reconstruct connected free evidence at the receiver;

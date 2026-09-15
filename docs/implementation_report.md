@@ -34,7 +34,7 @@ Tracker additions record state/counts, cumulative debt events and disturbance, m
 - `scheduling.delta_hz=10`, `scheduling.backlog_hz=10`.
 - `delivery.defer_seconds=0.2`, `delivery.ack_timeout_seconds=2.0`.
 - `priority.{delta,backlog}.{base,age,proximity,dynamic,destructive,age_seconds,distance_metres}`: weights one except BACKLOG age two; normalizations 10 seconds/10 metres.
-- `capacity.development_bytes_per_second=10000`, `capacity.telemetry_timeout_seconds=3`. The capacity provider exposes `interface`, `experimental_mmrc_factor=0`, and `development_bytes_per_second=10000`; launch exposes corresponding capacity arguments.
+- `capacity.telemetry_timeout_seconds=3`. The capacity provider exposes `interface` and `experimental_mmrc_factor=0.1`; launch exposes corresponding capacity arguments. Missing/stale MMRC telemetry grants zero map credit.
 - Matrix parameters support runtime updates. Other allocation, priority, scheduling, capacity and delivery settings require restart. The 1200-byte packet limit remains explicit.
 
 These defaults are development values, not validated physical capacity or optimal experimental tuning.

@@ -5,11 +5,21 @@ from surf_data_tracker.identification import fit_model
 
 class CapacityIdentificationTests(unittest.TestCase):
     def test_direct_preferred(self):
-        self.assertEqual(usable_capacity({'s1g_average_throughput_mbps':10},
+        live={'morse_sample_valid':True,'s1g_average_throughput_mbps':10,
+              's1g_success_probability_pct':100}
+        self.assertEqual(usable_capacity(live,
                          measured_application_bps=200,mmrc_factor=.5)[0],200)
         self.assertEqual(usable_capacity({'tx_interface_mbps':100})[0],0)
         self.assertEqual(usable_capacity({'tx_compatibility_rate_mbps':100})[0],0)
-        self.assertEqual(usable_capacity({'s1g_average_throughput_mbps':2},mmrc_factor=.5)[0],125000)
+        self.assertEqual(usable_capacity({**live,'s1g_average_throughput_mbps':2},mmrc_factor=.5)[0],125000)
+
+    def test_stale_or_missing_radio_state_stops_map_credit(self):
+        live={'morse_sample_valid':True,'s1g_average_throughput_mbps':2,
+              's1g_success_probability_pct':80}
+        self.assertEqual(usable_capacity(live,mmrc_factor=.1),
+                         (20000.0,'guarded_mmrc_estimate'))
+        self.assertEqual(usable_capacity({**live,'morse_sample_valid':False})[0],0)
+        self.assertEqual(usable_capacity({**live,'s1g_success_probability_pct':0})[0],0)
 
     def test_known_identification(self):
         rng=np.random.default_rng(71)

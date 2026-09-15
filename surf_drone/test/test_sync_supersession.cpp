@@ -8,9 +8,9 @@ TEST(InformationDelivery, TimeoutBacklogAndAckResolveDebtWithoutNewScans)
   {
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("capacity.telemetry_timeout_seconds", 30.),
       rclcpp::Parameter("delivery.ack_timeout_seconds", .2),
-      rclcpp::Parameter("delivery.defer_seconds", .1),
-      rclcpp::Parameter("capacity.development_bytes_per_second", 10000.)}));
+      rclcpp::Parameter("delivery.defer_seconds", .1)}));
     auto probe = std::make_shared<rclcpp::Node>("information_probe");
     using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
     using Ack = surf_multirobot_msgs::msg::SyncAck;
@@ -36,6 +36,11 @@ TEST(InformationDelivery, TimeoutBacklogAndAckResolveDebtWithoutNewScans)
       }
     };
     spin(.3);
+    auto capacity_pub = probe->create_publisher<surf_multirobot_msgs::msg::LinkMetrics>(
+      "/surf/comm/link_metrics", 10);
+    surf_multirobot_msgs::msg::LinkMetrics link;
+    link.link_name="halow"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
+    link.capacity_method="test_measurement"; capacity_pub->publish(link); spin(.2);
     sensor_msgs::msg::PointCloud2 cloud; cloud.header.frame_id = "map"; cloud.header.stamp = probe->now();
     sensor_msgs::PointCloud2Modifier mod(cloud); mod.setPointCloud2FieldsByString(1, "xyz"); mod.resize(1);
     sensor_msgs::PointCloud2Iterator<float> x(cloud,"x"), y(cloud,"y"), z(cloud,"z");
@@ -77,6 +82,7 @@ TEST(InformationDelivery, ReoccupyingClearedStaticPriorCreatesNewDebt)
   {
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("capacity.telemetry_timeout_seconds", 30.),
       rclcpp::Parameter("mapping.new_free_ray_stride", int64_t(16)),
       rclcpp::Parameter("filters.clear_min_misses", int64_t(1))}));
     auto probe = std::make_shared<rclcpp::Node>("prior_reoccupation_probe");
@@ -101,6 +107,11 @@ TEST(InformationDelivery, ReoccupyingClearedStaticPriorCreatesNewDebt)
       auto end=std::chrono::steady_clock::now()+std::chrono::duration<double>(seconds);
       while(std::chrono::steady_clock::now()<end) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(5));}
     };
+    auto capacity_pub = probe->create_publisher<surf_multirobot_msgs::msg::LinkMetrics>(
+      "/surf/comm/link_metrics", 10);
+    surf_multirobot_msgs::msg::LinkMetrics link;
+    link.link_name="halow"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
+    link.capacity_method="test_measurement"; capacity_pub->publish(link); spin(.2);
     auto cloud = [&](float px,float pz) {
       sensor_msgs::msg::PointCloud2 c;c.header.frame_id="map";c.header.stamp=probe->now();
       sensor_msgs::PointCloud2Modifier mod(c);mod.setPointCloud2FieldsByString(1,"xyz");mod.resize(1);
@@ -123,6 +134,7 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
   {
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("capacity.telemetry_timeout_seconds", 30.),
       rclcpp::Parameter("maximum_clear_rays", int64_t(1)),
       // This fixture deliberately constructs 60k points over a larger region.
       rclcpp::Parameter("mapping.radius_metres", 50.),
@@ -136,8 +148,7 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
       // This no-ACK throughput fixture keeps debt in BACKLOG. A long DELTA
       // window leaves high-gain in-flight DELTA consuming requested allocation.
       rclcpp::Parameter("delivery.defer_seconds", .1),
-      rclcpp::Parameter("delivery.ack_timeout_seconds", 10.),
-      rclcpp::Parameter("capacity.development_bytes_per_second", 10000.)}));
+      rclcpp::Parameter("delivery.ack_timeout_seconds", 10.)}));
     auto probe = std::make_shared<rclcpp::Node>("large_debt_probe");
     using Packet = surf_multirobot_msgs::msg::CompressedVoxelDelta;
     using Metrics = surf_multirobot_msgs::msg::AllocationMetrics;
@@ -160,6 +171,11 @@ TEST(InformationDelivery, LargeDebtUsesMultiplePacketsWithoutExceedingSharedCred
       while (std::chrono::steady_clock::now()<end) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
     };
     spin(.3);
+    auto capacity_pub = probe->create_publisher<surf_multirobot_msgs::msg::LinkMetrics>(
+      "/surf/comm/link_metrics", 10);
+    surf_multirobot_msgs::msg::LinkMetrics link;
+    link.link_name="halow"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
+    link.capacity_method="test_measurement"; capacity_pub->publish(link); spin(.2);
     sensor_msgs::msg::PointCloud2 cloud;cloud.header.frame_id="map";cloud.header.stamp=probe->now();
     sensor_msgs::PointCloud2Modifier mod(cloud);mod.setPointCloud2FieldsByString(1,"xyz");mod.resize(60000);
     sensor_msgs::PointCloud2Iterator<float> x(cloud,"x"),y(cloud,"y"),z(cloud,"z");
@@ -212,6 +228,7 @@ TEST(InformationDelivery, NewFreeSpaceAndExpiryHaveDifferentEvidence)
     using Packet=surf_multirobot_msgs::msg::CompressedVoxelDelta;
     auto sender=std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled",false),
+      rclcpp::Parameter("capacity.telemetry_timeout_seconds",30.),
       rclcpp::Parameter("mapping.new_free_ray_stride",int64_t(256)),
       rclcpp::Parameter("dynamic_retention_scans",int64_t(1))}));
     auto probe=std::make_shared<rclcpp::Node>("free_evidence_probe");
@@ -244,6 +261,11 @@ TEST(InformationDelivery, NewFreeSpaceAndExpiryHaveDifferentEvidence)
       auto until=std::chrono::steady_clock::now()+std::chrono::duration<double>(seconds);
       while(std::chrono::steady_clock::now()<until) {exec.spin_some();std::this_thread::sleep_for(std::chrono::milliseconds(2));}
     };
+    auto capacity_pub = probe->create_publisher<surf_multirobot_msgs::msg::LinkMetrics>(
+      "/surf/comm/link_metrics", 10);
+    surf_multirobot_msgs::msg::LinkMetrics link;
+    link.link_name="halow"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
+    link.capacity_method="test_measurement"; capacity_pub->publish(link); spin(.2);
     auto scan=[&](bool has_endpoint) {
       sensor_msgs::msg::PointCloud2 c;c.header.frame_id="map";c.header.stamp=probe->now();
       sensor_msgs::PointCloud2Modifier mod(c);mod.setPointCloud2FieldsByString(1,"xyz");mod.resize(has_endpoint ? 1 : 0);

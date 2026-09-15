@@ -70,9 +70,8 @@ integration:
     # Replace these with real interfaces or use an empty list.
     network_interfaces: []
 
-# Experimental conversion is disabled until a controlled offered-load sweep.
+# Guarded live MMRC estimate; calibrate the headroom fraction with offered-load sweeps.
 /**/halow_capacity_provider:
   ros__parameters:
     interface: wlx0cbf7400343c
-    experimental_mmrc_factor: 0.0
-    development_bytes_per_second: 10000000.0
+    experimental_mmrc_factor: 0.1

@@ -181,7 +181,6 @@ public:
     for (double rate : schedule_hz_) if (!std::isfinite(rate) || rate <= 0)
       throw std::invalid_argument("scheduling frequencies must be finite and positive");
     defer_seconds_ = declare_parameter<double>("delivery.defer_seconds", 1.5);
-    fallback_capacity_ = declare_parameter<double>("capacity.development_bytes_per_second", 10000.0);
     capacity_timeout_ = declare_parameter<double>("capacity.telemetry_timeout_seconds", 3.0);
     for (int i = 0; i < 2; ++i) {
       const std::string prefix = i == 0 ? "priority.delta." : "priority.backlog.";
@@ -200,7 +199,6 @@ public:
         throw std::invalid_argument("invalid priority weights");
     }
     if (!std::isfinite(control_dt_) || control_dt_ <= 0 ||
-      !std::isfinite(fallback_capacity_) || fallback_capacity_ < 0 ||
       !std::isfinite(realtime_ack_timeout_seconds_) || realtime_ack_timeout_seconds_ <= 0 ||
       !std::isfinite(defer_seconds_) || defer_seconds_ < 0 ||
       !std::isfinite(capacity_timeout_) || capacity_timeout_ <= 0 ||
@@ -919,8 +917,8 @@ private:
       weights_, peer, resolution_, peer_valid, maximum_control_entries_ - recovered);
     const double debt_cycle_ms = (steady_seconds() - debt_cycle_start) * 1000;
     const auto & x = debt_cycle.debt;
-    double capacity = fallback_capacity_;
-    std::string method = "development_configured";
+    double capacity = 0;
+    std::string method = "waiting_for_telemetry";
     if (capacity_received_ > 0) {
       capacity = start - capacity_received_ <= capacity_timeout_ && link_metrics_.usable_capacity_valid ?
         link_metrics_.usable_capacity_bytes_per_second : 0;
@@ -1171,7 +1169,7 @@ private:
   InformationDebt debt_;
   std::array<PriorityWeights, 2> weights_;
   std::mutex state_mutex_;
-  double control_dt_{.1}, defer_seconds_{1.5}, fallback_capacity_{10000}, capacity_timeout_{3};
+  double control_dt_{.1}, defer_seconds_{1.5}, capacity_timeout_{3};
   double capacity_received_{0}, last_control_time_{0}, matrix_update_time_{0};
   std::array<double, 2> credits_{}, last_scheduled_{};
   std::array<double, 2> schedule_hz_{10,10};
