@@ -2,7 +2,9 @@
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace surf_drone {
@@ -91,5 +93,98 @@ public:
 private:
   Model model_; Matrix gain_{Matrix::Zero()};
   uint64_t revision_{0}, rejected_updates_{0};
+};
+
+// Conservative online identification from receiver-confirmed packet service.
+// Debt transfers and priority changes are measured disturbances, so this model
+// intentionally estimates only diagonal retention and service effectiveness.
+class OnlineAllocationModelEstimator {
+public:
+  using Matrix = InformationAllocationController::Matrix;
+  using State = InformationAllocationController::State;
+  struct Config {
+    bool enabled{false};
+    double alpha{0.02};
+    double minimum_effectiveness{0.001};
+    double maximum_effectiveness{0.05};
+    double minimum_retention{0.98};
+    double maximum_retention{1.02};
+    double maximum_relative_change{0.10};
+    double update_interval_seconds{5.0};
+    uint64_t minimum_ack_samples{20};
+  };
+  OnlineAllocationModelEstimator() = default;
+  explicit OnlineAllocationModelEstimator(const Config & config) : config_(config) {}
+
+  void observe_ack(int stream, std::size_t bytes, double priority) {
+    if (stream < 0 || stream > 1 || bytes == 0 || !std::isfinite(priority) || priority <= 0) return;
+    const double sample = std::clamp(
+      priority / static_cast<double>(bytes), config_.minimum_effectiveness,
+      config_.maximum_effectiveness);
+    effectiveness_[stream] = ack_samples_[stream] == 0 ? sample :
+      (1.0 - config_.alpha) * effectiveness_[stream] + config_.alpha * sample;
+    ++ack_samples_[stream];
+  }
+
+  void observe_transition(
+    const State & previous, const State & current, const State & disturbance,
+    const State & acknowledged)
+  {
+    for (int stream = 0; stream < 2; ++stream) {
+      if (!std::isfinite(previous[stream] + current[stream] + disturbance[stream] +
+        acknowledged[stream]) || previous[stream] <= 1e-9) continue;
+      const double sample = std::clamp(
+        (current[stream] - disturbance[stream] + acknowledged[stream]) / previous[stream],
+        config_.minimum_retention, config_.maximum_retention);
+      retention_[stream] = transition_samples_[stream] == 0 ? sample :
+        (1.0 - config_.alpha) * retention_[stream] + config_.alpha * sample;
+      ++transition_samples_[stream];
+    }
+  }
+
+  bool candidate(
+    double now, double dt, const InformationAllocationController::Model & active,
+    InformationAllocationController::Model & output)
+  {
+    if (!config_.enabled || !std::isfinite(now + dt) || dt <= 0 ||
+      now - last_update_time_ < config_.update_interval_seconds ||
+      ack_samples_[0] < config_.minimum_ack_samples ||
+      ack_samples_[1] < config_.minimum_ack_samples ||
+      transition_samples_[0] < config_.minimum_ack_samples ||
+      transition_samples_[1] < config_.minimum_ack_samples ||
+      ack_samples_ == samples_at_update_) return false;
+    output = active;
+    output.a.setZero(); output.b.setZero();
+    for (int stream = 0; stream < 2; ++stream) {
+      output.a(stream, stream) = bounded_change(
+        active.a(stream, stream), retention_[stream]);
+      output.b(stream, stream) = bounded_change(
+        active.b(stream, stream), -dt * effectiveness_[stream]);
+    }
+    last_update_time_ = now;
+    samples_at_update_ = ack_samples_;
+    return true;
+  }
+
+  void accepted() {++updates_;}
+  void rejected() {++rejections_;}
+  const Config & config() const {return config_;}
+  const std::array<uint64_t, 2> & ack_samples() const {return ack_samples_;}
+  const std::array<uint64_t, 2> & transition_samples() const {return transition_samples_;}
+  const std::array<double, 2> & effectiveness() const {return effectiveness_;}
+  const std::array<double, 2> & retention() const {return retention_;}
+  uint64_t updates() const {return updates_;}
+  uint64_t rejections() const {return rejections_;}
+
+private:
+  double bounded_change(double active, double target) const {
+    const double limit = std::max(std::abs(active) * config_.maximum_relative_change, 1e-9);
+    return std::clamp(target, active - limit, active + limit);
+  }
+  Config config_;
+  std::array<uint64_t, 2> ack_samples_{}, transition_samples_{}, samples_at_update_{};
+  std::array<double, 2> effectiveness_{}, retention_{{1.0, 1.0}};
+  double last_update_time_{-std::numeric_limits<double>::infinity()};
+  uint64_t updates_{0}, rejections_{0};
 };
 }  // namespace surf_drone

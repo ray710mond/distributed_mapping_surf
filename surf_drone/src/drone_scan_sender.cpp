@@ -164,10 +164,44 @@ public:
       declare_parameter<int64_t>("transport.maximum_packet_bytes", 1200)));
     realtime_ack_timeout_seconds_ = declare_parameter<double>("delivery.ack_timeout_seconds", 4.0);
     control_dt_ = declare_parameter<double>("allocation.dt", 0.1);
+    OnlineAllocationModelEstimator::Config adaptive_config;
+    adaptive_config.enabled = declare_parameter<bool>("allocation.adaptive.enabled", false);
+    adaptive_config.alpha = declare_parameter<double>("allocation.adaptive.alpha", 0.02);
+    adaptive_config.minimum_effectiveness = declare_parameter<double>(
+      "allocation.adaptive.minimum_priority_per_byte", 0.001);
+    adaptive_config.maximum_effectiveness = declare_parameter<double>(
+      "allocation.adaptive.maximum_priority_per_byte", 0.05);
+    adaptive_config.minimum_retention = declare_parameter<double>(
+      "allocation.adaptive.minimum_retention", 0.98);
+    adaptive_config.maximum_retention = declare_parameter<double>(
+      "allocation.adaptive.maximum_retention", 1.02);
+    adaptive_config.maximum_relative_change = declare_parameter<double>(
+      "allocation.adaptive.maximum_relative_change", 0.10);
+    adaptive_config.update_interval_seconds = declare_parameter<double>(
+      "allocation.adaptive.update_interval_seconds", 5.0);
+    adaptive_config.minimum_ack_samples = static_cast<uint64_t>(std::max<int64_t>(
+      1, declare_parameter<int64_t>("allocation.adaptive.minimum_ack_samples", 20)));
+    if (!std::isfinite(adaptive_config.alpha) || adaptive_config.alpha <= 0 ||
+      adaptive_config.alpha > 1 || !std::isfinite(adaptive_config.minimum_effectiveness) ||
+      !std::isfinite(adaptive_config.maximum_effectiveness) ||
+      adaptive_config.minimum_effectiveness <= 0 ||
+      adaptive_config.maximum_effectiveness < adaptive_config.minimum_effectiveness ||
+      !std::isfinite(adaptive_config.minimum_retention) ||
+      !std::isfinite(adaptive_config.maximum_retention) ||
+      adaptive_config.minimum_retention <= 0 ||
+      adaptive_config.maximum_retention < adaptive_config.minimum_retention ||
+      !std::isfinite(adaptive_config.maximum_relative_change) ||
+      adaptive_config.maximum_relative_change <= 0 || adaptive_config.maximum_relative_change > 1 ||
+      !std::isfinite(adaptive_config.update_interval_seconds) ||
+      adaptive_config.update_interval_seconds <= 0)
+      throw std::invalid_argument("invalid online allocation identification settings");
+    online_estimator_ = OnlineAllocationModelEstimator(adaptive_config);
     schedule_hz_[0] = declare_parameter<double>("scheduling.delta_hz", 10.0);
     schedule_hz_[1] = declare_parameter<double>("scheduling.backlog_hz", 10.0);
     maximum_control_entries_ = static_cast<std::size_t>(std::max<int64_t>(16,
       declare_parameter<int64_t>("scheduling.maximum_entries_per_cycle", 4096)));
+    maximum_packets_per_cycle_ = static_cast<std::size_t>(std::max<int64_t>(1,
+      declare_parameter<int64_t>("scheduling.maximum_packets_per_cycle", 16)));
     maximum_cluster_entries_ = static_cast<std::size_t>(std::max<int64_t>(16,
       declare_parameter<int64_t>("scheduling.maximum_cluster_traversal_entries", 8192)));
     cluster_scheduling_enabled_ = declare_parameter<bool>("scheduling.cluster_enabled", true);
@@ -367,12 +401,18 @@ public:
   }
 
 private:
-  struct DeliveryAttempt {double sent; int stream; std::vector<Coord> coordinates;};
+  struct DeliveryAttempt {
+    double sent;
+    int stream;
+    std::size_t wire_bytes{0};
+    std::vector<Coord> coordinates;
+  };
   std::unordered_map<uint64_t, DeliveryAttempt> attempts_;
   void delivery_metric(uint64_t version, const DeliveryAttempt & attempt, bool acknowledged, double lock_wait_ms = 0) {
     surf_multirobot_msgs::msg::RealtimeAckMetrics m;
     m.header.stamp = now(); m.map_epoch = map_epoch_; m.version = version;
     m.traffic_class = attempt.stream + 1; m.acknowledged = acknowledged;
+    m.wire_bytes = attempt.wire_bytes;
     m.timeout_ms = realtime_ack_timeout_seconds_ * 1000;
     m.ack_lock_wait_ms = lock_wait_ms;
     if (acknowledged) m.update_completion_rtt_ms = m.final_chunk_rtt_ms =
@@ -382,7 +422,9 @@ private:
   void acknowledge_packet(uint64_t version, int stream, double lock_wait_ms) {
     auto it = attempts_.find(version);
     if (it == attempts_.end() || it->second.stream != stream) return;
-    debt_.ack(version, it->second.coordinates); delivery_metric(version, it->second, true, lock_wait_ms); attempts_.erase(it);
+    const double acknowledged_priority = debt_.ack(version, it->second.coordinates);
+    online_estimator_.observe_ack(stream, it->second.wire_bytes, acknowledged_priority);
+    delivery_metric(version, it->second, true, lock_wait_ms); attempts_.erase(it);
   }
   void realtime_ack_callback(const surf_multirobot_msgs::msg::RealtimeAck::SharedPtr ack)
   {
@@ -920,6 +962,29 @@ private:
       weights_, peer, resolution_, peer_valid, maximum_control_entries_ - recovered);
     const double debt_cycle_ms = (steady_seconds() - debt_cycle_start) * 1000;
     const auto & x = debt_cycle.debt;
+    if (have_adaptive_transition_) {
+      InformationAllocationController::State disturbance_delta, acknowledged_delta;
+      for (int stream = 0; stream < 2; ++stream) {
+        disturbance_delta[stream] =
+          debt_.disturbance[stream] - previous_disturbance_[stream];
+        acknowledged_delta[stream] =
+          debt_.acknowledged[stream] - previous_acknowledged_[stream];
+      }
+      online_estimator_.observe_transition(
+        {previous_debt_[0], previous_debt_[1]}, {x[0], x[1]},
+        disturbance_delta, acknowledged_delta);
+      InformationAllocationController::Model candidate;
+      if (online_estimator_.candidate(start, control_dt_, allocator_.model(), candidate)) {
+        std::string error;
+        if (allocator_.update(candidate, error)) {
+          online_estimator_.accepted();
+          matrix_update_time_ = now().seconds();
+        } else {
+          online_estimator_.rejected();
+          RCLCPP_WARN(get_logger(), "Retaining controller after adaptive update: %s", error.c_str());
+        }
+      }
+    }
     double capacity = 0;
     std::string method = "waiting_for_telemetry";
     {
@@ -954,9 +1019,19 @@ private:
     m.debt_cycle_ms = debt_cycle_ms; m.priority_ms = debt_cycle_ms;
     m.step = ++control_sequence_; m.nominal_dt = control_dt_; m.actual_dt = actual_dt;
     m.debt = x; m.previous_debt = previous_debt_; previous_debt_ = x;
+    previous_disturbance_ = debt_.disturbance;
+    previous_acknowledged_ = debt_.acknowledged;
+    have_adaptive_transition_ = true;
     m.usable_capacity = capacity; m.capacity_method = method;
     m.configuration_revision = allocator_.revision(); m.matrix_update_time = matrix_update_time_;
     m.rejected_matrix_updates = allocator_.rejected_updates(); m.projection_scale = allocation.scale;
+    m.adaptive_model_enabled = online_estimator_.config().enabled;
+    m.adaptive_ack_samples = online_estimator_.ack_samples();
+    m.adaptive_transition_samples = online_estimator_.transition_samples();
+    m.adaptive_priority_per_byte = online_estimator_.effectiveness();
+    m.adaptive_retention = online_estimator_.retention();
+    m.adaptive_model_updates = online_estimator_.updates();
+    m.adaptive_model_rejections = online_estimator_.rejections();
     m.excluded_debt = debt_.excluded;
     m.disturbance = debt_.disturbance; m.timed_out_debt = debt_.timed_out;
     m.generated_debt = debt_.generated; m.acknowledged_debt = debt_.acknowledged;
@@ -1037,8 +1112,10 @@ private:
       m.priority_ms += m.selection_ms[stream];
       if (candidates.empty()) continue;
       std::size_t offset = 0;
-      // Bound callback work while allowing small packets to consume accrued credit.
-      for (int packet = 0; packet < 16 && offset < candidates.size(); ++packet) {
+      // Credit remains the byte governor; this ceiling only bounds callback work.
+      for (std::size_t packet = 0;
+        packet < maximum_packets_per_cycle_ && offset < candidates.size(); ++packet)
+      {
         if (std::min(credits_[stream], shared_credit_) <= 0) break;
         surf_multirobot_msgs::msg::VoxelDelta delta;
         delta.header = last_header_; delta.source_id = robot_name_; delta.map_epoch = map_epoch_;
@@ -1080,7 +1157,8 @@ private:
         const double sent_at = steady_seconds();
         best.transmit_stamp = now();
         auto & attempt = attempts_[packet_version_];
-        attempt.sent = sent_at; attempt.stream = stream; attempt.coordinates.reserve(count);
+        attempt.sent = sent_at; attempt.stream = stream; attempt.wire_bytes = bytes;
+        attempt.coordinates.reserve(count);
         for (std::size_t j = 0; j < count; ++j) {
           auto * candidate = candidates[offset+j];
           debt_.mark_sent(*candidate, packet_version_, sent_at);
@@ -1149,6 +1227,7 @@ private:
   double resolution_{0.05};
   double mapping_radius_{10.0};
   std::size_t maximum_ray_work_{32768}, ray_cursor_{0}, maximum_control_entries_{4096};
+  std::size_t maximum_packets_per_cycle_{16};
   std::size_t new_free_ray_stride_{1}, new_free_ray_cursor_{0};
   std::size_t maximum_cluster_entries_{8192};
   int cluster_neighbour_radius_{2};
@@ -1184,6 +1263,7 @@ private:
   std::chrono::steady_clock::time_point last_input_time_{};
 
   InformationAllocationController allocator_;
+  OnlineAllocationModelEstimator online_estimator_;
   InformationDebt debt_;
   std::array<PriorityWeights, 2> weights_;
   std::mutex state_mutex_;
@@ -1194,6 +1274,8 @@ private:
   std::array<double, 2> schedule_hz_{10,10};
   double starvation_fraction_{0.1}, starvation_age_seconds_{30};
   std::array<double, 2> previous_debt_{};
+  std::array<double, 2> previous_disturbance_{}, previous_acknowledged_{};
+  bool have_adaptive_transition_{false};
   double shared_credit_{0};
   std::string map_capacity_pause_reason_;
   uint64_t packet_version_{0}, last_scan_stamp_{0};

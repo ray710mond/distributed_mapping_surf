@@ -1,0 +1,17 @@
+std_msgs/Header header
+string node_name
+string topic
+uint64 queue_limit_messages
+uint64 queue_limit_bytes
+uint64 queued_messages
+uint64 queued_bytes
+uint64 accepted_messages
+uint64 accepted_bytes
+uint64 transmitted_messages
+uint64 transmitted_bytes
+uint64 overflow_drops
+uint64 overflow_drop_bytes
+uint64 superseded_messages
+uint64 superseded_bytes
+uint64 send_failures
+float64 oldest_queued_age_ms

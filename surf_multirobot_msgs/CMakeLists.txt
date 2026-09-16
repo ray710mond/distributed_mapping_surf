@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DeliveryMetrics.msg"
   "msg/LinkMetrics.msg"
   "msg/AllocationMetrics.msg"
+  "msg/BridgeQueueMetrics.msg"
   "msg/PipelineMetrics.msg"
   "msg/RealtimeAck.msg"
   "msg/RealtimeAckMetrics.msg"

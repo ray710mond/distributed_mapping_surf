@@ -27,8 +27,10 @@
       # do not expand a single free ray into a wholly free coarse voxel.
       radius_metres: 50.0
       maximum_ray_cells_per_scan: 32768
-      # Receiver reconstructs free prefixes from occupied hits; do not transmit novel free samples.
-      new_free_ray_stride: 0
+      # Send each eligible ray's capped FREE endpoint so the receiver can
+      # reconstruct its measured free prefix even when the occupied return is
+      # outside this communication radius.
+      new_free_ray_stride: 1
     compression_level: 1
     transport:
       maximum_packet_bytes: 1200
@@ -56,6 +58,18 @@
       clear_min_misses: 3
     allocation:
       dt: 0.1
+      adaptive:
+        # Estimate diagonal A/B from debt transitions and causally matched ACKs.
+        # Q/R remain fixed policy costs.
+        enabled: true
+        alpha: 0.02
+        minimum_priority_per_byte: 0.001
+        maximum_priority_per_byte: 0.05
+        minimum_retention: 0.98
+        maximum_retention: 1.02
+        maximum_relative_change: 0.10
+        update_interval_seconds: 5.0
+        minimum_ack_samples: 20
       a:
       - 1.0
       - 0.0
@@ -91,6 +105,9 @@
       # Per-voxel bonus = weight * log(1 + unsent changed neighbors).
       spatial_change_weight: 1.0
       maximum_entries_per_cycle: 4096
+      # Allows two 0.1 s intervals of credit to drain at roughly 350 kB/s.
+      # Shared and per-class byte credits remain the actual traffic limit.
+      maximum_packets_per_cycle: 64
       # Bound proximity-connected BACKLOG traversal independently of debt scoring.
       maximum_cluster_traversal_entries: 8192
       # 2 voxels = 10 cm at 5 cm resolution; groups sparse quantized samples.

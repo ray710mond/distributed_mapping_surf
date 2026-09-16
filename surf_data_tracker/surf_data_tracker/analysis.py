@@ -101,6 +101,14 @@ def derived_measurements(event):
                 unit = 'bytes/s'
             elif metric.startswith(('target_bytes_', 'wire_bytes_', 'compressed_bytes_', 'uncompressed_bytes_')):
                 unit = 'bytes'
+            elif metric.startswith('adaptive_priority_per_byte_'):
+                unit = 'priority/byte'
+            elif metric.startswith(('adaptive_ack_samples_', 'adaptive_transition_samples_')) or metric in (
+                    'adaptive_model_updates', 'adaptive_model_rejections'):
+                unit = 'count'
+            elif metric in ('allocation_realization', 'capacity_utilization',
+                            'delivery_efficiency', 'ack_success_fraction'):
+                unit = 'ratio'
             elif metric.endswith('_mbps'):
                 unit = 'Mbps'
             elif metric.endswith('_dbm'):
@@ -212,16 +220,24 @@ def derived_measurements(event):
                 unit = 'bytes'
             elif name.endswith('_packets_delta'):
                 unit = 'packets'
+            elif name == 'ack_success_fraction':
+                unit = 'ratio'
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 yield category, pipeline, stage, name, unit, value, 'measured', ''
 
 
-def _allocation_counter(category, metric):
-    return category == 'allocation' and (metric.startswith((
+def _cumulative_counter(category, metric):
+    allocation = category == 'allocation' and (metric.startswith((
         'generated_debt_', 'acknowledged_debt_', 'superseded_debt_',
         'reclassified_debt_', 'disturbance_', 'timed_out_debt_', 'excluded_debt_')) or
         metric in ('superseded_count', 'stale_observations', 'stale_pending_discarded',
-                   'rejected_matrix_updates'))
+                   'rejected_matrix_updates', 'adaptive_model_updates',
+                   'adaptive_model_rejections'))
+    bridge = category == 'network' and metric in (
+        'accepted_messages', 'accepted_bytes', 'transmitted_messages',
+        'transmitted_bytes', 'overflow_drops', 'overflow_drop_bytes',
+        'superseded_messages', 'superseded_bytes', 'send_failures')
+    return allocation or bridge
 
 
 def build_summary(events):
@@ -232,10 +248,11 @@ def build_summary(events):
         for row in derived_measurements(event):
             _add_metric(groups, *row)
             category, pipeline, stage, metric, unit, value, measurement, note = row
-            if _allocation_counter(category, metric) and math.isfinite(value):
+            if _cumulative_counter(category, metric) and math.isfinite(value):
                 key = (category, pipeline, stage, metric, unit, measurement, note)
                 p = event['payload']
-                identity = (key, event.get('host'), p.get('source_id'), p.get('map_epoch'))
+                identity = (key, event.get('host'), p.get('source_id'), p.get('map_epoch'),
+                            p.get('node_name'), p.get('topic'))
                 if identity in previous:
                     change = value - previous[identity]
                     if change >= 0 or metric.startswith('disturbance_'):
@@ -247,10 +264,10 @@ def build_summary(events):
         rows.append({
             'category': category, 'pipeline': pipeline, 'stage': stage,
             'metric': metric, 'unit': unit, 'measurement': measurement, 'note': note,
-            **describe(values), 'total': (counter_changes[key] if _allocation_counter(category, metric)
+            **describe(values), 'total': (counter_changes[key] if _cumulative_counter(category, metric)
                                           else sum(values)),
         })
-        if _allocation_counter(category, metric):
+        if _cumulative_counter(category, metric):
             rows[-1]['note'] = 'total is observed counter change per source/epoch; excludes unknown initial value'
     return rows
 
@@ -402,7 +419,7 @@ def build_timeseries(events, window_s):
             'metric': metric, 'unit': unit, 'measurement': measurement,
             'sample_count': stats['sample_count'], 'mean': stats['mean'],
             'min': stats['min'], 'max': stats['max'],
-            'total': None if _allocation_counter(category, metric) else sum(values),
+            'total': None if _cumulative_counter(category, metric) else sum(values),
         }
         row.update(host_context.get((window, host), {}))
         row.update(context.get((window, host, pipeline, stage), {}))
@@ -415,7 +432,77 @@ def build_timeseries(events, window_s):
                             measurement='calculated', mean=sum(values) * 8.0 / window_s / 1e6,
                             min=None, max=None, total=None)
             rows.append(rate_row)
+    delivery = defaultdict(lambda: [0.0, 0.0])
+    for event in events:
+        window = (event['wall_time_ns'] - origin) // window_ns
+        key = (window, event['host'])
+        payload = event['payload']
+        if event['category'] == 'allocation':
+            delivery[key][0] += sum(payload.get(f'wire_bytes_{i}', 0) for i in range(2))
+        elif event['category'] == 'latency':
+            delivery[key][1] += payload.get('acknowledged_wire_bytes', 0) or 0
+    for (window, host), (offered, acknowledged) in sorted(delivery.items()):
+        if offered <= 0:
+            continue
+        rows.append({
+            'window_start_s': window * window_s,
+            'window_end_s': (window + 1) * window_s,
+            'host': host,
+            'category': 'utilization', 'pipeline': 'mapping', 'stage': 'delivery',
+            'metric': 'delivery_efficiency', 'unit': 'ratio',
+            'measurement': 'calculated', 'sample_count': 1,
+            'mean': acknowledged / offered, 'min': None, 'max': None, 'total': None,
+        })
     return rows
+
+
+def utilization_summary(events):
+    offered = sum(
+        sum(event['payload'].get(f'wire_bytes_{i}', 0) for i in range(2))
+        for event in events if event['category'] == 'allocation')
+    acknowledged = sum(
+        event['payload'].get('acknowledged_wire_bytes', 0) or 0
+        for event in events if event['category'] == 'latency')
+    if offered <= 0:
+        return []
+    value = acknowledged / offered
+    return [{
+        'category': 'utilization', 'pipeline': 'mapping', 'stage': 'delivery',
+        'metric': 'delivery_efficiency', 'unit': 'ratio',
+        'measurement': 'calculated', 'note':
+            'receiver-acknowledged serialized packet bytes / sender-offered serialized bytes',
+        **describe([value]), 'total': None,
+    }]
+
+
+def utilization_warnings(summary):
+    warnings = []
+    def rows(metric):
+        return [row for row in summary if row['metric'] == metric]
+    realization = rows('allocation_realization')
+    if realization and realization[0]['mean'] is not None and realization[0]['mean'] < .9:
+        warnings.append('Mean offered/allocated rate is below 0.90 while allocation is active.')
+    efficiency = rows('delivery_efficiency')
+    if efficiency and efficiency[0]['mean'] is not None and efficiency[0]['mean'] < .9:
+        warnings.append('Acknowledged/offered serialized bytes is below 0.90.')
+    ack = rows('ack_success_fraction')
+    if ack and ack[0]['mean'] is not None and ack[0]['mean'] < .95:
+        warnings.append('Packet ACK success fraction is below 0.95.')
+    computation = rows('computation_ms')
+    nominal = rows('nominal_dt')
+    if computation and nominal and computation[0]['p95'] is not None and nominal[0]['median']:
+        if computation[0]['p95'] >= nominal[0]['median'] * 1000:
+            warnings.append('Controller computation p95 reaches or exceeds the nominal interval.')
+    overflow = rows('overflow_drops')
+    if any((row.get('total') or 0) > 0 for row in overflow):
+        warnings.append('network_bridge dropped messages because a topic queue overflowed.')
+    failures = rows('send_failures')
+    if any((row.get('total') or 0) > 0 for row in failures):
+        warnings.append('network_bridge reported network-interface write failures.')
+    queued = rows('queued_messages')
+    if any((row.get('max') or 0) > 0 for row in queued):
+        warnings.append('network_bridge retained queued messages during the run; inspect oldest queue age.')
+    return warnings
 
 
 def _write_csv(path, rows, default_fields):
@@ -440,7 +527,8 @@ def generate_plots(timeseries, directory):
                   'rx_interface_mbps', 'application_goodput_mbps',
                   'sender_to_receiver_ms', 'jitter_ms', 'packet_loss_pct', 'rssi_dbm',
                   'tx_bitrate_mbps', 'rx_bitrate_mbps', 'distance_m',
-                  'compute_ms', 'output_bytes')
+                  'compute_ms', 'output_bytes', 'allocation_realization',
+                  'capacity_utilization', 'delivery_efficiency')
     for metric in candidates:
         rows = [row for row in timeseries if row['metric'] == metric and row.get('mean') is not None]
         if not rows:
@@ -482,6 +570,7 @@ def analyze(run_directory, output=None, window_s=1.0, pose_max_age_ms=500.0,
     enrich_delivery(events)
     enrich_network_counters(events)
     summary = build_summary(events)
+    summary.extend(utilization_summary(events))
     timeseries = build_timeseries(events, window_s)
     _write_csv(output / 'summary.csv', summary,
                ('category', 'pipeline', 'stage', 'metric', 'unit', 'measurement',
@@ -507,10 +596,11 @@ def analyze(run_directory, output=None, window_s=1.0, pose_max_age_ms=500.0,
                           'clock_sync_method is verified and uncertainty is recorded. Values smaller '
                           'than that uncertainty are not resolved latency measurements.'),
         'unavailable_by_architecture': [
-            'network_bridge private framing/compression bytes',
+            'network_bridge private framing/compression bytes (queue ingress and egress bytes are available)',
             'receiver Bonxai integration compute time',
             'per-flow TCP retransmissions without eBPF/socket instrumentation',
             'unused link capacity; normal application traffic measures consumption, not saturation capacity'],
+        'utilization_warnings': utilization_warnings(summary),
     }
     metadata['plots'] = generate_plots(timeseries, output / 'plots') if plots else {'status': 'disabled'}
     (output / 'metadata.json').write_text(json.dumps(metadata, indent=2, allow_nan=False) + '\n')

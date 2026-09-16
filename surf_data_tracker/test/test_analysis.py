@@ -7,7 +7,8 @@ from pathlib import Path
 
 from surf_data_tracker.analysis import (analyze, build_summary, build_timeseries,
                                         derived_measurements, enrich_delivery,
-                                        enrich_network_distance, load_events)
+                                        enrich_network_distance, load_events,
+                                        utilization_summary, utilization_warnings)
 from surf_data_tracker.storage import EventStore
 
 
@@ -116,6 +117,50 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(float(rx['total']), 600)
         self.assertEqual(float(packets['total']), 5)
         self.assertFalse(any(row['metric'] == 'rx_bytes' for row in rows))
+
+    def test_utilization_uses_acknowledged_bytes_and_warns_on_bridge_drop(self):
+        events=[
+            {'category':'allocation','payload':{'wire_bytes_0':600,'wire_bytes_1':400}},
+            {'category':'latency','payload':{'acknowledged_wire_bytes':850}},
+        ]
+        result=utilization_summary(events)
+        self.assertEqual(result[0]['mean'],.85)
+        summary=result+[
+            {'metric':'allocation_realization','mean':.8},
+            {'metric':'ack_success_fraction','mean':.9},
+        ]
+        warnings=utilization_warnings(summary)
+        self.assertEqual(len(warnings),3)
+
+    def test_bridge_counters_use_observed_delta_and_raise_warnings(self):
+        events = [
+            {'wall_time_ns': 1, 'host': 'drone', 'category': 'network',
+             'pipeline': 'network_bridge', 'stage': '/delta',
+             'payload': {'overflow_drops': 2, 'send_failures': 0,
+                         'queued_messages': 0}},
+            {'wall_time_ns': 2, 'host': 'drone', 'category': 'network',
+             'pipeline': 'network_bridge', 'stage': '/delta',
+             'payload': {'overflow_drops': 5, 'send_failures': 1,
+                         'queued_messages': 3}},
+        ]
+        summary = build_summary(events)
+        overflow = next(row for row in summary if row['metric'] == 'overflow_drops')
+        self.assertEqual(overflow['total'], 3)
+        warnings = utilization_warnings(summary)
+        self.assertEqual(len(warnings), 3)
+
+    def test_bridge_counter_deltas_are_isolated_by_node(self):
+        events = []
+        for stamp, node, count in ((1, '/bridge_a', 10), (2, '/bridge_b', 20),
+                                   (3, '/bridge_a', 13), (4, '/bridge_b', 25)):
+            events.append({
+                'wall_time_ns': stamp, 'host': 'drone', 'category': 'network',
+                'pipeline': 'network_bridge', 'stage': '/delta',
+                'payload': {'node_name': node, 'topic': '/delta',
+                            'overflow_drops': count}})
+        summary = build_summary(events)
+        overflow = next(row for row in summary if row['metric'] == 'overflow_drops')
+        self.assertEqual(overflow['total'], 8)
 
     def test_distance_frame_guard_and_alignment(self):
         events = [

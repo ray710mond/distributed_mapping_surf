@@ -173,6 +173,16 @@ Incremental byte reduction compares adjacent representations; cumulative byte re
 
 `network_bridge` 3.0.0 does not expose its private second compression/framing size, so physical application wire bytes are unavailable. Interface counters cannot attribute TCP retransmissions to one process. Bonxai exposes no integration timing hook here, so receiver integration compute cost is unavailable. Driver-specific wireless fields remain absent when the driver does not report them.
 
+Allocation events include offered/allocated and offered/capacity ratios. ACK
+events carry the attempt's serialized bytes, allowing analysis to report
+acknowledged/offered delivery efficiency and warnings for low realization, poor
+ACK success, or controller computation that reaches the nominal interval.
+The SURF `network_bridge` fork publishes host-local per-topic queue limits and
+occupancy, oldest queued age, accepted/transmitted bytes and messages, overflow
+and supersession drops, and network-interface write failures. Its private
+post-zstd framing size remains unavailable. Sender ACK timeouts, receiver
+sequence gaps, and host interface counters provide independent transport evidence.
+
 Observed interface throughput bounds describe traffic seen during this run, not unused link capacity. A defensible saturation ceiling/lower operating envelope still requires a separate controlled offered-load sweep (for example iperf) at the same distances; running that transfer during the architecture experiment would perturb the system being measured.
 
 ## Configuration and extension

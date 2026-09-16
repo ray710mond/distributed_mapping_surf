@@ -11,6 +11,8 @@ float32 timeout_ms
 
 # 1 DELTA, 2 BACKLOG (legacy type name retained).
 uint8 traffic_class
+# Serialized packet bytes associated with this attempt.
+uint64 wire_bytes
 
 # Sender callback entry -> state mutex acquisition, excludes DDS/executor wait.
 float32 ack_lock_wait_ms

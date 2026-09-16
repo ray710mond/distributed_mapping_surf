@@ -41,6 +41,50 @@ TEST(Allocation, OutdoorCostsFavorDeltaWithoutSlowingBacklogTail) {
   EXPECT_DOUBLE_EQ(tuned.allocate({10000, 1000000}, 0).allocated.norm(), 0);
 }
 
+TEST(Allocation, OnlineModelUsesAckedPacketEffectivenessWithBounds) {
+  OnlineAllocationModelEstimator::Config config;
+  config.enabled = true;
+  config.alpha = 1.0;
+  config.minimum_ack_samples = 2;
+  config.update_interval_seconds = 1.0;
+  config.maximum_relative_change = 0.10;
+  OnlineAllocationModelEstimator estimator(config);
+  InformationAllocationController controller;
+  for (int stream = 0; stream < 2; ++stream) {
+    estimator.observe_ack(stream, 1000, stream == 0 ? 20 : 10);
+    estimator.observe_ack(stream, 1000, stream == 0 ? 20 : 10);
+  }
+  estimator.observe_transition({100, 200}, {99, 202}, {0, 2}, {0, 0});
+  estimator.observe_transition({100, 200}, {99, 202}, {0, 2}, {0, 0});
+  InformationAllocationController::Model candidate;
+  ASSERT_TRUE(estimator.candidate(1.0, 0.1, controller.model(), candidate));
+  EXPECT_DOUBLE_EQ(candidate.a(0, 0), .99);
+  EXPECT_DOUBLE_EQ(candidate.a(1, 1), 1.0);
+  // Raw targets are -0.002 and -0.001; the first update is limited to 10%.
+  EXPECT_NEAR(candidate.b(0, 0), -.0011, 1e-12);
+  EXPECT_NEAR(candidate.b(1, 1), -.001, 1e-12);
+  EXPECT_DOUBLE_EQ(candidate.a(0, 1), 0);
+  EXPECT_DOUBLE_EQ(candidate.b(1, 0), 0);
+  std::string error;
+  EXPECT_TRUE(controller.update(candidate, error));
+}
+
+TEST(Allocation, OnlineModelWaitsForBothClassesAndNewAcks) {
+  OnlineAllocationModelEstimator::Config config;
+  config.enabled = true;
+  config.minimum_ack_samples = 1;
+  config.update_interval_seconds = 1.0;
+  OnlineAllocationModelEstimator estimator(config);
+  InformationAllocationController controller;
+  InformationAllocationController::Model candidate;
+  estimator.observe_transition({1, 1}, {1, 1}, {0, 0}, {0, 0});
+  estimator.observe_ack(0, 100, 1);
+  EXPECT_FALSE(estimator.candidate(1.0, .1, controller.model(), candidate));
+  estimator.observe_ack(1, 100, 1);
+  EXPECT_TRUE(estimator.candidate(1.0, .1, controller.model(), candidate));
+  EXPECT_FALSE(estimator.candidate(2.0, .1, controller.model(), candidate));
+}
+
 TEST(Debt, OutdoorDeliveryWindowSurvivesSlowCycleAndDelayedAck) {
   InformationDebt debt;
   const Coord coord{1, 0, 0};

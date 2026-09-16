@@ -138,6 +138,32 @@ wrong dimensions fail startup configuration. Other allocator/priority/scheduling
 parameters require restart and are rejected if changed at runtime. Record every
 revision before comparing controller experiments.
 
+### Online A/B identification
+
+`allocation.adaptive.enabled` enables conservative in-flight updates of diagonal
+`A` and `B`; `Q` and `R` remain fixed policy costs. Every successful packet ACK
+is matched to that attempt's serialized CDR bytes and the exact priority debt it
+resolved. The service estimate is an EWMA of acknowledged priority per byte and
+the corresponding discrete input coefficient is `B_ii=-dt*effectiveness_i`.
+Retention is estimated from the exact debt balance after subtracting measured
+disturbance and adding acknowledged service. DELTA-to-BACKLOG transfer remains a
+measured disturbance, so the estimator does not duplicate it in off-diagonal
+matrix entries.
+
+Updates require the configured minimum ACK and transition samples from both
+classes. Effectiveness and retention are bounded, each accepted matrix entry can
+move only by `maximum_relative_change`, and updates are separated by
+`update_interval_seconds`. The existing Riccati and closed-loop checks remain
+the final authority; rejected candidates retain the previous controller. Metrics
+publish estimator samples, effectiveness, retention, accepted updates and
+rejections alongside the active matrices and configuration revision.
+
+This estimate captures receiver-confirmed average service effectiveness but does
+not remove transport delay from the plant. Keep the update rate slow relative to
+ACK RTT and validate matrix revisions against allocation, saturation and latency.
+Changing `AllocationMetrics` requires rebuilding and deploying the message,
+sender and tracker packages together.
+
 For example, an experiment client can call `set_parameters_atomically` with
 four double-array parameters. Avoid four independent `ros2 param set` operations
 when a coherent multi-matrix update is intended.
@@ -191,7 +217,8 @@ control intervals of their respective rate, with a one-packet minimum. This
 permits a bounded saved-credit burst; packets are not continuous fluid. At the
 development defaults the shared ceiling is 2000 bytes. A callback may publish
 multiple independently ACKed packets while debiting these same credits. Work is
-bounded to 16 packets per class per callback and 2400 candidates at the default
+bounded by `scheduling.maximum_packets_per_cycle` per class per callback and
+2400 candidates at the default
 1200-byte packet limit. Combined cumulative publication is bounded by integrated shared
 capacity plus credit saved before a measurement window. Executor catch-up is
 bounded to two nominal intervals.
@@ -262,6 +289,17 @@ cautions. The figure compares debt, per-class allocation/capacity and offered
 load. Existing wireless plots/timeseries retain radio state, interface throughput,
 loss/retries and pose alignment for calibration. No online A/B adaptation or
 unsupported distance law is fitted.
+
+The identification JSON also compares raw requested rate, capacity-projected
+allocated rate, and offered serialized bytes over candidate input-history
+windows. The selected delay minimizes chronological holdout RMSE. `B_effective`
+is the sum of the fitted lag coefficients; it is a diagnostic and is not a
+drop-in delay-free LQR `B`. Requested-rate fits can be rank-deficient because a
+fixed gain makes the request a direct function of debt. The acknowledged-service
+section independently verifies
+`x_next = x + delta(disturbance) - delta(acknowledged_debt)` and reports
+acknowledged priority per offered CDR byte. Use `--max-lag-steps` to change the
+default 30-step search bound.
 
 Next experiments should sweep offered load at fixed radio conditions to calibrate
 capacity with control overhead; inject loss/reordering/restarts; excite both debt

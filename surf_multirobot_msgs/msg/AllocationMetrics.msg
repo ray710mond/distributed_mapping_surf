@@ -25,6 +25,14 @@ float64[4] k
 uint64 configuration_revision
 uint64 rejected_matrix_updates
 float64 matrix_update_time
+# Online A/B identification uses causally matched packet bytes and ACKed debt.
+bool adaptive_model_enabled
+uint64[2] adaptive_ack_samples
+uint64[2] adaptive_transition_samples
+float64[2] adaptive_priority_per_byte
+float64[2] adaptive_retention
+uint64 adaptive_model_updates
+uint64 adaptive_model_rejections
 float64[2] requested_rate
 float64[2] allocated_rate
 float64 usable_capacity

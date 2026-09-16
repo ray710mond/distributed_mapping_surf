@@ -10,3 +10,6 @@
 [submodule "dependencies/glim_ros2"]
 	path = dependencies/glim_ros2
 	url = https://github.com/koide3/glim_ros2.git
+[submodule "dependencies/network_bridge"]
+	path = dependencies/network_bridge
+	url = https://github.com/ray710mond/network_bridge.git

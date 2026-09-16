@@ -336,31 +336,37 @@ public:
       }
     }
   }
-  void ack(uint64_t packet) {
-    if (packet == 0) return;
+  double ack(uint64_t packet) {
+    if (packet == 0) return 0;
+    double resolved = 0;
     for (auto & [c, e] : entries) {
       (void)c;
       if (e.pending && e.packet == packet) {
+        resolved += e.priority;
         acknowledged[e.stream] += e.priority; --pending_counts_[e.stream];
         clear_packet(e); e.pending = false;
         e.acknowledged_stamp = e.stamp;
         remove_pending(c, true);
       }
     }
+    return resolved;
   }
-  void ack(uint64_t packet, const std::vector<Coord> & coordinates) {
-    if (!packet) return;
+  double ack(uint64_t packet, const std::vector<Coord> & coordinates) {
+    if (!packet) return 0;
+    double resolved = 0;
     for (const auto & c : coordinates) {
       auto it = entries.find(c);
       if (it == entries.end()) continue;
       auto & e = it->second;
       if (e.pending && e.packet == packet) {
+        resolved += e.priority;
         acknowledged[e.stream] += e.priority; --pending_counts_[e.stream];
         clear_packet(e); e.pending = false;
         e.acknowledged_stamp = e.stamp;
         remove_pending(c, true);
       }
     }
+    return resolved;
   }
   std::array<double, 2> score(double now, const std::array<PriorityWeights, 2> & weights,
     const tf2::Vector3 & peer, double resolution, bool peer_valid = true) {

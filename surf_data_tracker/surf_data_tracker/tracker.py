@@ -17,8 +17,9 @@ from rclpy.parameter import parameter_value_to_python
 from rclpy.parameter_client import AsyncParameterClient
 from rcl_interfaces.msg import ParameterEvent
 from sensor_msgs.msg import PointCloud2
-from surf_multirobot_msgs.msg import (DeliveryMetrics, PipelineMetrics,
-                                      RealtimeAckMetrics, AllocationMetrics, LinkMetrics)
+from surf_multirobot_msgs.msg import (AllocationMetrics, BridgeQueueMetrics, DeliveryMetrics,
+                                      LinkMetrics, PipelineMetrics,
+                                      RealtimeAckMetrics)
 
 from .clock import detect_clock_sync
 from .network import NetworkSampler
@@ -107,6 +108,8 @@ class DataTracker(Node):
         self.create_subscription(AllocationMetrics, '/drone/comm/allocation_metrics',
                                  self._allocation, 100)
         self.create_subscription(LinkMetrics, '/surf/comm/link_metrics', self._capacity, 20)
+        self.create_subscription(BridgeQueueMetrics, '/surf/comm/bridge_queue_metrics',
+                                 self._bridge_queue, 50)
         self.pose_subscriptions = []
         for specification in self.declare_parameter(
                 'pose_topics', self._default_pose_topics(self.role)).value:
@@ -274,9 +277,15 @@ class DataTracker(Node):
             payload[f'mean_priority_sent_{i}'] = (
                 m.sent_priority[i] / m.selected_count[i] if m.selected_count[i] else 0.0)
             payload[f'offered_cdr_rate_{i}'] = m.wire_bytes[i] / m.actual_dt if m.actual_dt > 0 else 0.0
+        allocated = sum(m.allocated_rate)
+        offered = sum(payload[f'offered_cdr_rate_{i}'] for i in range(2))
+        payload['allocation_realization'] = offered / allocated if allocated > 0 else None
+        payload['capacity_utilization'] = (
+            offered / m.usable_capacity if m.usable_capacity > 0 else None)
         self._record('allocation', 'information_debt', 'controller', payload,
                      wall_time_ns=_stamp_ns(m.header.stamp),
                      event_id=f'allocation:{m.source_id}:{m.map_epoch}:{m.step}')
+
         key = (m.source_id, m.map_epoch)
         previous = self._map_capacity_pause_reasons.get(key)
         outstanding = int(m.pending_count[0] + m.pending_count[1])
@@ -302,6 +311,12 @@ class DataTracker(Node):
                 'allocation_step': m.step,
             }, wall_time_ns=_stamp_ns(m.header.stamp),
                 event_id=f'map-transmission:{m.source_id}:{m.map_epoch}:{m.step}')
+
+    def _bridge_queue(self, m):
+        payload = {field: getattr(m, field)
+                   for field in m.get_fields_and_field_types() if field != 'header'}
+        self._record('network', 'network_bridge', m.topic, payload,
+                     wall_time_ns=_stamp_ns(m.header.stamp))
 
     def _capacity(self, m):
         self._record('capacity', 'radio', m.link_name, {
@@ -381,6 +396,9 @@ class DataTracker(Node):
             'map_epoch': m.map_epoch, 'version': m.version,
             'ack_received': int(m.acknowledged),
             'ack_lost': int(not m.acknowledged),
+            'ack_success_fraction': int(m.acknowledged),
+            'attempted_wire_bytes': m.wire_bytes,
+            'acknowledged_wire_bytes': m.wire_bytes if m.acknowledged else 0,
             'update_completion_rtt_ms': (
                 m.update_completion_rtt_ms if m.acknowledged else None),
             'final_chunk_rtt_ms': m.final_chunk_rtt_ms if m.acknowledged else None,
