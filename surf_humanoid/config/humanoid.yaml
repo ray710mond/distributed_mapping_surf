@@ -5,7 +5,7 @@
       min_range: 0.75
       self_radius: 0.7
       min_z: 0.25
-      max_z: 20.0
+      max_z: 3.0
       radius_metres: 100.0
       maximum_voxels: 1200
     use_sim_time: false

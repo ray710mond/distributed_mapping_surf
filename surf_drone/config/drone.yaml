@@ -25,7 +25,7 @@
     mapping:
       # Observed local region around the current sensor. Keep fine resolution;
       # do not expand a single free ray into a wholly free coarse voxel.
-      radius_metres: 100.0
+      radius_metres: 20.0
       maximum_ray_cells_per_scan: 32768
       # Receiver reconstructs free prefixes from occupied hits; do not transmit novel free samples.
       new_free_ray_stride: 0
@@ -33,15 +33,15 @@
     transport:
       maximum_packet_bytes: 1200
     dynamic_retention_scans: 20
-    maximum_ray_voxels: 1200
+    maximum_ray_voxels: 600
     # Outdoor clearing took 264–323 ms median. Rotate a smaller ray subset;
     # validate clearing latency in the next run (miss threshold stays unchanged).
-    maximum_clear_rays: 1024
+    maximum_clear_rays: 256
     filters:
       min_range: 0.75
-      max_range: 150.0
+      max_range: 50.0
       min_z: 0.25
-      max_z: 20.0
+      max_z: 3.0
       self_radius: 0.7
       humanoid_mask:
         enabled: true
@@ -68,10 +68,10 @@
       - -0.001
       q:
       # Favor fresh debt without slowing isolated BACKLOG/tail drainage.
-      - 100.0
+      - 10.0
       - 0.0
       - 0.0
-      - 1.0
+      - 3.0
       r:
       - 0.0001
       - 0.0
@@ -97,7 +97,7 @@
       cluster_neighbour_radius_voxels: 2
       delta_hz: 10.0
       backlog_hz: 10.0
-      starvation_fraction: 0.1
+      starvation_fraction: 0.25
       starvation_age_seconds: 30.0
     priority:
       delta:
