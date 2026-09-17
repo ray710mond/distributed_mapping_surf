@@ -10,6 +10,7 @@ RUN apt-get update \
         python3-colcon-common-extensions \
         python3-rosdep \
         ros-jazzy-network-bridge \
+        ros-jazzy-rviz2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/surf
@@ -21,6 +22,7 @@ COPY surf_drone src/distributed_mapping_surf/surf_drone
 COPY surf_humanoid src/distributed_mapping_surf/surf_humanoid
 COPY surf_data_tracker src/distributed_mapping_surf/surf_data_tracker
 COPY surf_portable_bringup src/distributed_mapping_surf/surf_portable_bringup
+COPY deploy/docker/rviz /opt/surf/rviz
 RUN (rosdep init 2>/dev/null || true) \
     && rosdep update --rosdistro jazzy \
     && apt-get update \

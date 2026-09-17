@@ -25,3 +25,26 @@ services:
       - portable.launch.py
       - role:=${SURF_ROLE:?Set SURF_ROLE to drone or humanoid}
       - config:=/config/robot.yaml
+
+  rviz:
+    image: surf-portable-jazzy:${SURF_IMAGE_TAG:-latest}
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.jazzy
+    profiles: ["rviz"]
+    network_mode: host
+    init: true
+    restart: "no"
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:?Set ROS_DOMAIN_ID}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-LOCALHOST}
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      XAUTHORITY: /tmp/.docker.xauth
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/tmp/.docker.xauth:ro
+    command:
+      - rviz2
+      - -d
+      - /opt/surf/rviz/portable_map.rviz
