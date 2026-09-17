@@ -39,20 +39,10 @@ collection.
 ### Persistent Morse HaLow telemetry access
 
 The tracker prefers snapshots of the Morse `mmrc_table_csv` and `page_stats`
-debugfs endpoints. Because debugfs does not support POSIX ACLs on these hosts, a
-root systemd service reads only those endpoints at 1 Hz and atomically publishes
-read-only snapshots under `/run/surf-halow-telemetry/<interface>`. Install it
-once on each host; it starts on every boot and tolerates driver reloads:
-
-```bash
-# Laptop
-sudo ./deploy/halow-telemetry/install-surf-halow-telemetry.sh \
-  raymond wlx0cbf740035d4
-
-# Jetson
-sudo ./deploy/halow-telemetry/install-surf-halow-telemetry.sh \
-  <jetson-user> <jetson-halow-interface>
-```
+debugfs endpoints. Because debugfs does not support POSIX ACLs on these hosts,
+the consuming system should install a root service that reads only those
+endpoints at 1 Hz and atomically publishes read-only snapshots under
+`/run/surf-halow-telemetry/<interface>`.
 
 The Jetson Compose deployment bind-mounts only the exported `/run` directory
 into the container read-only. Recreate the container after updating the Compose
@@ -66,12 +56,10 @@ cat "/run/surf-halow-telemetry/<interface>/page_stats"
 systemctl status surf-halow-telemetry-exporter.service --no-pager
 ```
 
-For a full host deployment, the laptop and Jetson network installers also
-install this exporter, a persistent power-save-off policy applied at boot and
-after NetworkManager reconnects, and the `surf-preflight` health check. The
-Jetson installer persists its laptop HaLow Chrony source and continuously
-refreshes the clock proof mounted into the container. The laptop is configured
-as an offline Chrony authority for the dedicated HaLow subnet.
+For a full host deployment, install the exporter, a persistent power-save-off
+policy applied at boot and after NetworkManager reconnects, and a preflight
+health check from the consuming system repository. The Jetson deployment should
+refresh the clock proof mounted into the container.
 
 ## Run, stop, collect, analyze
 

@@ -1,12 +1,12 @@
 # SURF portable mapping and communications stack
 
-This repository contains the deployable SURF mapping and communications stack.
+This repository contains the SURF mapping and communications ROS packages.
 Clone it under a ROS workspace's `src/` directory.
 
-The extracted stack owns collaborative mapping, compressed map transport,
-radio/network provisioning, clock verification, and telemetry. It does not
-start or configure a robot's lidar, localization, locomotion, flight control,
-or general perception stack.
+The extracted stack owns collaborative mapping, compressed map transport, and
+telemetry. It does not start or configure a robot's lidar, localization,
+locomotion, flight control, host networking, Docker runtime, or general
+perception stack.
 
 Map communication uses a continuous DELTA/BACKLOG LQR allocator over one HaLow
 radio. See [architecture and experiment guide](docs/information_allocation.md)
@@ -42,7 +42,6 @@ and validation instructions.
 ```text
 surf_*/                 First-party ROS packages
 config/                 Per-robot contract examples
-deploy/                 Radio, network, clock, and Jetson deployment assets
 docs/                   Integration and extraction notes
 tools/                  Configuration validation utilities
 dependencies/           Required pinned Git submodules
@@ -73,10 +72,8 @@ See [transport fixes](docs/transport_and_state_fixes.md) for limits and verifica
 preserve the complete current source set, but the portable launch does not
 invoke their Livox/LIO/GLIM hardware pipeline.
 
-The Jetson Compose deployment is intended to be launched from the parent
-`SURF_2026` checkout. Its build context includes this repository and the
-sibling `LIO-Localization` submodule so `/opt/surf_ws/src` contains the entire
-testing workspace.
+Device-specific launchers, Dockerfiles, radio setup, and clock provisioning
+belong in the parent system repository that consumes these packages.
 
 ## Launch against an existing robot stack
 
@@ -100,7 +97,5 @@ The role names retain current behavior: `drone` produces compressed voxel
 deltas, while `humanoid` receives and fuses them. This is deliberate so the
 extraction does not change the current protocol.
 
-Run `sudo ./deploy/install-surf-cli.sh` once to install short operational
-commands, including `surf-drone-compose` and `surf-validate-config`. Run the
-latter before deployment; it catches placeholders and
+Run `tools/validate-config` before deployment; it catches placeholders and
 basic cross-field errors without requiring ROS.
