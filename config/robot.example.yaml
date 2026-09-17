@@ -75,3 +75,5 @@ integration:
   ros__parameters:
     interface: wlx0cbf7400343c
     experimental_mmrc_factor: 0.2
+    # Positive test override for non-Morse short-range peer links.
+    fixed_capacity_bps: 0.0

@@ -441,7 +441,8 @@ def _nodes(context):
             name='halow_capacity_provider', output='screen',
             parameters=[{'interface': LaunchConfiguration('capacity_interface').perform(context) or
                          ('wlx0cbf7400343c' if role == 'drone' else 'wlx0cbf740035d4'),
-                         'experimental_mmrc_factor': ParameterValue(LaunchConfiguration('capacity_mmrc_factor'), value_type=float)}],
+                         'experimental_mmrc_factor': ParameterValue(LaunchConfiguration('capacity_mmrc_factor'), value_type=float),
+                         'fixed_capacity_bps': ParameterValue(LaunchConfiguration('capacity_fixed_bps'), value_type=float)}],
         ),
         Node(
             package='network_bridge', executable='network_bridge', namespace=role,
@@ -636,6 +637,9 @@ def generate_launch_description():
             description='Optional experiment notes stored verbatim.'),
         DeclareLaunchArgument('capacity_interface', default_value=''),
         DeclareLaunchArgument('capacity_mmrc_factor', default_value='0.2'),
+        DeclareLaunchArgument(
+            'capacity_fixed_bps', default_value='0.0',
+            description='Positive test override for non-Morse peer links.'),
         DeclareLaunchArgument(
             'tracker_clock_sync_method', default_value='unverified',
             description='Verified clock synchronization method, or unverified.'),
