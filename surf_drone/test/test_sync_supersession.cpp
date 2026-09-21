@@ -8,6 +8,7 @@ TEST(InformationDelivery, TimeoutBacklogAndAckResolveDebtWithoutNewScans)
   {
     auto sender = std::make_shared<surf_drone::DroneScanSender>(rclcpp::NodeOptions().parameter_overrides({
       rclcpp::Parameter("filters.humanoid_mask.enabled", false),
+      rclcpp::Parameter("capacity.link_name", "wifi5"),
       rclcpp::Parameter("capacity.telemetry_timeout_seconds", 30.),
       rclcpp::Parameter("delivery.ack_timeout_seconds", .2),
       rclcpp::Parameter("delivery.defer_seconds", .1)}));
@@ -39,7 +40,7 @@ TEST(InformationDelivery, TimeoutBacklogAndAckResolveDebtWithoutNewScans)
     auto capacity_pub = probe->create_publisher<surf_multirobot_msgs::msg::LinkMetrics>(
       "/surf/comm/link_metrics", 10);
     surf_multirobot_msgs::msg::LinkMetrics link;
-    link.link_name="halow"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
+    link.link_name="wifi5"; link.usable_capacity_valid=true; link.usable_capacity_bytes_per_second=10000;
     link.capacity_method="test_measurement"; capacity_pub->publish(link); spin(.2);
     sensor_msgs::msg::PointCloud2 cloud; cloud.header.frame_id = "map"; cloud.header.stamp = probe->now();
     sensor_msgs::PointCloud2Modifier mod(cloud); mod.setPointCloud2FieldsByString(1, "xyz"); mod.resize(1);

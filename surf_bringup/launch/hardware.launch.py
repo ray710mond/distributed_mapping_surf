@@ -441,7 +441,7 @@ def _nodes(context):
             name='halow_capacity_provider', output='screen',
             parameters=[{'interface': LaunchConfiguration('capacity_interface').perform(context) or
                          ('wlP1p1s0' if role == 'drone' else 'wlo1'),
-                         'link_name': 'wifi5',
+                         'link_name': LaunchConfiguration('capacity_link_name'),
                          'link_type': 'wifi5',
                          'experimental_mmrc_factor': ParameterValue(LaunchConfiguration('capacity_mmrc_factor'), value_type=float),
                          'fixed_capacity_bps': ParameterValue(LaunchConfiguration('capacity_fixed_bps'), value_type=float)}],
@@ -508,6 +508,7 @@ def _nodes(context):
                 {
                     'input_topic': body_cloud,
                     'resolution': voxel_resolution,
+                    'capacity.link_name': LaunchConfiguration('capacity_link_name'),
                 },
             ],
         ))
@@ -638,6 +639,7 @@ def generate_launch_description():
             'tracker_notes', default_value='',
             description='Optional experiment notes stored verbatim.'),
         DeclareLaunchArgument('capacity_interface', default_value=''),
+        DeclareLaunchArgument('capacity_link_name', default_value='wifi5'),
         DeclareLaunchArgument('capacity_mmrc_factor', default_value='0.2'),
         DeclareLaunchArgument(
             'capacity_fixed_bps', default_value='500000.0',

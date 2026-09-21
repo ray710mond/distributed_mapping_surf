@@ -97,6 +97,8 @@
       # Outdoor control intervals reached 1.00 s; allow a selection opportunity.
       defer_seconds: 1.5
     capacity:
+      # Must match LinkMetrics.link_name from halow_capacity_provider.
+      link_name: halow
       telemetry_timeout_seconds: 3.0
     scheduling:
       # Ray prefixes reconstruct connected free evidence at the receiver;

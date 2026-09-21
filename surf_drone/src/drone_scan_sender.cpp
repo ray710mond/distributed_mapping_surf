@@ -106,6 +106,7 @@ public:
       "sync_request_topic", "/" + robot_name_ + "/transport/sync_request");
     link_metrics_topic_ = declare_parameter<std::string>(
       "link_metrics_topic", "/surf/comm/link_metrics");
+    capacity_link_name_ = declare_parameter<std::string>("capacity.link_name", "halow");
     metrics_topic_ = declare_parameter<std::string>(
       "metrics_topic", "/" + robot_name_ + "/comm/pipeline_metrics");
     transform_source_ = declare_parameter<std::string>("pose_source.type", "tf");
@@ -502,7 +503,7 @@ private:
 
   void link_metrics_callback(const surf_multirobot_msgs::msg::LinkMetrics::SharedPtr metrics)
   {
-    if (metrics->link_name != "halow") return;
+    if (!capacity_link_name_.empty() && metrics->link_name != capacity_link_name_) return;
     std::lock_guard<std::mutex> lock(link_metrics_mutex_);
     capacity_received_ = steady_seconds();
     link_metrics_ = *metrics;
@@ -1217,6 +1218,7 @@ private:
   std::string backlog_ack_topic_;
   std::string backlog_request_topic_;
   std::string link_metrics_topic_;
+  std::string capacity_link_name_;
   std::string metrics_topic_;
   std::string transform_source_;
   std::string odometry_topic_;
