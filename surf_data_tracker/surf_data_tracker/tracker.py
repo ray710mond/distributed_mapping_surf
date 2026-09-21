@@ -178,9 +178,9 @@ class DataTracker(Node):
     @staticmethod
     def _default_interfaces(role):
         if role == 'drone':
-            return ['wlx0cbf7400343c=halow']
+            return ['wlP1p1s0=wifi5']
         if role == 'humanoid':
-            return ['wlx0cbf740035d4=halow']
+            return ['wlo1=wifi5']
         return []
 
     def _record(self, *args, **kwargs):

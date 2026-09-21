@@ -30,13 +30,15 @@ def main(args=None):
         def __init__(self):
             super().__init__('halow_capacity_provider')
             interface = self.declare_parameter('interface', 'wlx0cbf7400343c').value
+            self.link_name = self.declare_parameter('link_name', 'peer').value
+            self.link_type = self.declare_parameter('link_type', 'wifi5').value
             self.factor = self.declare_parameter('experimental_mmrc_factor', 0.2).value
             self.fixed_capacity_bps = self.declare_parameter('fixed_capacity_bps', 0.0).value
             if not math.isfinite(self.factor) or not 0 < self.factor <= 1:
                 raise ValueError('experimental_mmrc_factor must be in (0, 1]')
             if not math.isfinite(self.fixed_capacity_bps) or self.fixed_capacity_bps < 0:
                 raise ValueError('fixed_capacity_bps must be non-negative')
-            self.sampler = NetworkSampler({interface: 'halow'})
+            self.sampler = NetworkSampler({interface: self.link_type})
             self.publisher = self.create_publisher(LinkMetrics, '/surf/comm/link_metrics', 10)
             self.create_timer(1.0, self.sample)
 
@@ -47,7 +49,7 @@ def main(args=None):
                 raw, measured_application_bps=measured, mmrc_factor=self.factor)
             m = LinkMetrics()
             m.header.stamp = self.get_clock().now().to_msg()
-            m.link_name = 'halow'
+            m.link_name = self.link_name
             m.usable_capacity_valid = method != 'telemetry_unavailable'
             m.usable_capacity_bytes_per_second = capacity
             m.capacity_method = method

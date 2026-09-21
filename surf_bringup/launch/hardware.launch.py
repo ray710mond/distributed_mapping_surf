@@ -440,7 +440,9 @@ def _nodes(context):
             package='surf_data_tracker', executable='halow_capacity_provider',
             name='halow_capacity_provider', output='screen',
             parameters=[{'interface': LaunchConfiguration('capacity_interface').perform(context) or
-                         ('wlx0cbf7400343c' if role == 'drone' else 'wlx0cbf740035d4'),
+                         ('wlP1p1s0' if role == 'drone' else 'wlo1'),
+                         'link_name': 'wifi5',
+                         'link_type': 'wifi5',
                          'experimental_mmrc_factor': ParameterValue(LaunchConfiguration('capacity_mmrc_factor'), value_type=float),
                          'fixed_capacity_bps': ParameterValue(LaunchConfiguration('capacity_fixed_bps'), value_type=float)}],
         ),
@@ -638,7 +640,7 @@ def generate_launch_description():
         DeclareLaunchArgument('capacity_interface', default_value=''),
         DeclareLaunchArgument('capacity_mmrc_factor', default_value='0.2'),
         DeclareLaunchArgument(
-            'capacity_fixed_bps', default_value='0.0',
+            'capacity_fixed_bps', default_value='500000.0',
             description='Positive test override for non-Morse peer links.'),
         DeclareLaunchArgument(
             'tracker_clock_sync_method', default_value='unverified',

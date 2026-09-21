@@ -1,11 +1,11 @@
-# One physical HaLow link. TCP carries reliable recovery/control only.
+# One physical peer link. TCP carries reliable recovery/control only.
 /**/halow_bridge:
   ros__parameters:
     network_interface: network_bridge::UdpInterface
     UdpInterface:
-      local_address: CHANGE_ME_HUMANOID_HALOW_ADDRESS
+      local_address: CHANGE_ME_HUMANOID_PEER_ADDRESS
       receive_port: 46000
-      remote_address: CHANGE_ME_DRONE_HALOW_ADDRESS
+      remote_address: CHANGE_ME_DRONE_PEER_ADDRESS
       send_port: 46000
     default_rate: 100.0
     default_zstd_level: 1
